@@ -101,7 +101,7 @@ bot.hears('➕ Thêm khách', ctx=>{
 // ================= DELETE =================
 
 bot.hears('🗑 Xóa khách', async ctx=>{
-
+ try{
  const res = await db.query("SELECT name FROM customers ORDER BY name")
 
  if(!res.rows.length)
@@ -114,14 +114,14 @@ bot.hears('🗑 Xóa khách', async ctx=>{
  state[ctx.from.id] = { step: "delete_select" }
 
  ctx.reply("Chọn khách cần xóa:", Markup.keyboard(buttons).resize())
-
+ }catch(err){ console.error(err); ctx.reply("❌ Lỗi: "+err.message) }
 })
 
 
 // ================= EDIT =================
 
 bot.hears('✏️ Sửa khách', async ctx=>{
-
+ try{
  const res = await db.query("SELECT name FROM customers ORDER BY name")
 
  if(!res.rows.length)
@@ -134,7 +134,7 @@ bot.hears('✏️ Sửa khách', async ctx=>{
  state[ctx.from.id] = { step: "edit_select_user" }
 
  ctx.reply("Chọn khách cần sửa:", Markup.keyboard(buttons).resize())
-
+ }catch(err){ console.error(err); ctx.reply("❌ Lỗi: "+err.message) }
 })
 
 
@@ -149,7 +149,7 @@ bot.hears('📊 Thống kê', ctx=>{
 // ================= EXPORT =================
 
 bot.hears('📥 Export Excel', async ctx=>{
-
+ try{
  const res = await db.query("SELECT * FROM customers ORDER BY service, expiry_date")
 
  if(!res.rows.length)
@@ -185,7 +185,7 @@ bot.hears('📥 Export Excel', async ctx=>{
  await ctx.replyWithDocument({source:file})
 
  fs.unlinkSync(file)
-
+ }catch(err){ console.error(err); ctx.reply("❌ Lỗi: "+err.message) }
 })
 
 
@@ -209,6 +209,8 @@ bot.hears('🔴 Reset DB', ctx=>{
 // ================= TEXT HANDLER =================
 
 bot.on('text', async ctx=>{
+
+ try{
 
  const text = ctx.message.text
 
@@ -413,6 +415,13 @@ bot.on('text', async ctx=>{
 
   return mainMenu(ctx)
 
+ }
+
+ }catch(err){
+  console.error("TEXT HANDLER ERROR:", err)
+  delete state[ctx.from.id]
+  ctx.reply("❌ Lỗi: " + err.message + "\n\nVui lòng thử lại.")
+  return mainMenu(ctx)
  }
 
 })
