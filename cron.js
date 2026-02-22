@@ -3,7 +3,7 @@ const db=require('./db')
 
 module.exports=(bot)=>{
 
-cron.schedule('0 9 * * *',async()=>{
+cron.schedule('0 9 * * *', async ()=>{
 
  const now=new Date()
 
@@ -26,9 +26,8 @@ cron.schedule('0 9 * * *',async()=>{
 `⚠️ Sắp hết hạn
 
 👤 ${u.name}
-📧 ${u.account_email}
-⏰ ${u.expiry_date}
-
+📧 ${u.gmail_owner}
+⏰ ${formatVN(u.expiry_date)}
 `,{
  reply_markup:{
   inline_keyboard:[
@@ -40,13 +39,13 @@ cron.schedule('0 9 * * *',async()=>{
    ],
    [
     {
-     text:"Liên hệ",
-     url:u.contact_link || "https://facebook.com"
+     text:"Liên hệ FB",
+     url:u.contact_link
     }
    ]
   ]
  }
- })
+})
 
   }
 
@@ -63,5 +62,13 @@ cron.schedule('0 9 * * *',async()=>{
 },{
  timezone:"Asia/Ho_Chi_Minh"
 })
+
+}
+
+function formatVN(date){
+
+ return new Date(date).toLocaleString("vi-VN",{
+  timeZone:"Asia/Ho_Chi_Minh"
+ })
 
 }
