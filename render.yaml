@@ -1,7 +1,0 @@
-
-services:
-  - type: web
-    name: premium-manager-bot
-    runtime: node
-    buildCommand: npm install
-    startCommand: node index.js
