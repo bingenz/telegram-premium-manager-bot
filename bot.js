@@ -22,7 +22,6 @@ const db = new Pool({
 // ================= INIT DB =================
 
 async function initDB(){
-
  await db.query(`
  CREATE TABLE IF NOT EXISTS customers(
   id SERIAL PRIMARY KEY,
@@ -34,16 +33,42 @@ async function initDB(){
   expiry_date TIMESTAMP
  )
  `)
-
 }
 
 initDB()
 
 
+// ================= VALIDATION =================
+
+function isValidDate(text){
+ // Phải đúng định dạng dd/mm/yyyy
+ if(!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(text.trim())) return false
+ const p = text.trim().split("/")
+ const d = parseInt(p[0])
+ const m = parseInt(p[1])
+ const y = parseInt(p[2])
+ if(m < 1 || m > 12) return false
+ if(d < 1 || d > 31) return false
+ if(y < 2000 || y > 2100) return false
+ // Kiểm tra ngày thực tế hợp lệ
+ const date = new Date(y, m-1, d)
+ if(date.getFullYear() !== y || date.getMonth() !== m-1 || date.getDate() !== d) return false
+ return true
+}
+
+function isValidMonths(text){
+ const n = parseInt(text.trim())
+ return !isNaN(n) && n > 0 && n <= 120 && String(n) === text.trim()
+}
+
+function isValidText(text){
+ return text && text.trim().length > 0
+}
+
+
 // ================= MENU =================
 
 function mainMenu(ctx){
-
  return ctx.reply(
   "👑 PREMIUM MANAGER",
   Markup.keyboard([
@@ -55,7 +80,6 @@ function mainMenu(ctx){
    ['🔴 Reset DB']
   ]).resize()
  )
-
 }
 
 bot.use((ctx,next)=>{
@@ -102,18 +126,12 @@ bot.hears('➕ Thêm khách', ctx=>{
 
 bot.hears('🗑 Xóa khách', async ctx=>{
  try{
- const res = await db.query("SELECT name FROM customers ORDER BY name")
-
- if(!res.rows.length)
-  return ctx.reply("Không có khách")
-
- const buttons = res.rows.map(u=>[u.name])
-
- buttons.push(['⬅️ Hủy'])
-
- state[ctx.from.id] = { step: "delete_select" }
-
- ctx.reply("Chọn khách cần xóa:", Markup.keyboard(buttons).resize())
+  const res = await db.query("SELECT name FROM customers ORDER BY name")
+  if(!res.rows.length) return ctx.reply("Không có khách")
+  const buttons = res.rows.map(u=>[u.name])
+  buttons.push(['⬅️ Hủy'])
+  state[ctx.from.id] = { step: "delete_select" }
+  ctx.reply("Chọn khách cần xóa:", Markup.keyboard(buttons).resize())
  }catch(err){ console.error(err); ctx.reply("❌ Lỗi: "+err.message) }
 })
 
@@ -122,18 +140,12 @@ bot.hears('🗑 Xóa khách', async ctx=>{
 
 bot.hears('✏️ Sửa khách', async ctx=>{
  try{
- const res = await db.query("SELECT name FROM customers ORDER BY name")
-
- if(!res.rows.length)
-  return ctx.reply("Không có khách")
-
- const buttons = res.rows.map(u=>[u.name])
-
- buttons.push(['⬅️ Hủy'])
-
- state[ctx.from.id] = { step: "edit_select_user" }
-
- ctx.reply("Chọn khách cần sửa:", Markup.keyboard(buttons).resize())
+  const res = await db.query("SELECT name FROM customers ORDER BY name")
+  if(!res.rows.length) return ctx.reply("Không có khách")
+  const buttons = res.rows.map(u=>[u.name])
+  buttons.push(['⬅️ Hủy'])
+  state[ctx.from.id] = { step: "edit_select_user" }
+  ctx.reply("Chọn khách cần sửa:", Markup.keyboard(buttons).resize())
  }catch(err){ console.error(err); ctx.reply("❌ Lỗi: "+err.message) }
 })
 
@@ -150,41 +162,36 @@ bot.hears('📊 Thống kê', ctx=>{
 
 bot.hears('📥 Export Excel', async ctx=>{
  try{
- const res = await db.query("SELECT * FROM customers ORDER BY service, expiry_date")
+  const res = await db.query("SELECT * FROM customers ORDER BY service, expiry_date")
+  if(!res.rows.length) return ctx.reply("Không có dữ liệu")
 
- if(!res.rows.length)
-  return ctx.reply("Không có dữ liệu")
+  const wb = new ExcelJS.Workbook()
+  const ws = wb.addWorksheet("Customers")
 
- const wb = new ExcelJS.Workbook()
- const ws = wb.addWorksheet("Customers")
+  ws.columns=[
+   {header:'Service',key:'service',width:15},
+   {header:'Name',key:'name',width:20},
+   {header:'Gmail',key:'gmail',width:30},
+   {header:'Contact',key:'contact',width:30},
+   {header:'Start',key:'start',width:15},
+   {header:'Expiry',key:'expiry',width:15}
+  ]
 
- ws.columns=[
- {header:'Service',key:'service',width:15},
- {header:'Name',key:'name',width:20},
- {header:'Gmail',key:'gmail',width:30},
- {header:'Contact',key:'contact',width:30},
- {header:'Start',key:'start',width:15},
- {header:'Expiry',key:'expiry',width:15}
- ]
-
- res.rows.forEach(u=>{
-  ws.addRow({
-   service:u.service,
-   name:u.name,
-   gmail:u.gmail,
-   contact:u.contact,
-   start:format(u.start_date),
-   expiry:format(u.expiry_date)
+  res.rows.forEach(u=>{
+   ws.addRow({
+    service:u.service,
+    name:u.name,
+    gmail:u.gmail,
+    contact:u.contact,
+    start:format(u.start_date),
+    expiry:format(u.expiry_date)
+   })
   })
- })
 
- const file="customers.xlsx"
-
- await wb.xlsx.writeFile(file)
-
- await ctx.replyWithDocument({source:file})
-
- fs.unlinkSync(file)
+  const file="customers.xlsx"
+  await wb.xlsx.writeFile(file)
+  await ctx.replyWithDocument({source:file})
+  fs.unlinkSync(file)
  }catch(err){ console.error(err); ctx.reply("❌ Lỗi: "+err.message) }
 })
 
@@ -192,9 +199,7 @@ bot.hears('📥 Export Excel', async ctx=>{
 // ================= RESET DB =================
 
 bot.hears('🔴 Reset DB', ctx=>{
-
  state[ctx.from.id] = { step: "reset_confirm" }
-
  ctx.reply(
   "⚠️ Bạn có chắc muốn XÓA TOÀN BỘ dữ liệu không?\nHành động này KHÔNG THỂ HOÀN TÁC!",
   Markup.keyboard([
@@ -202,7 +207,6 @@ bot.hears('🔴 Reset DB', ctx=>{
    ['⬅️ Hủy']
   ]).resize()
  )
-
 })
 
 
@@ -212,210 +216,186 @@ bot.on('text', async ctx=>{
 
  try{
 
- const text = ctx.message.text
+  const text = ctx.message.text.trim()
+  const s = state[ctx.from.id]
 
- const s = state[ctx.from.id]
-
- if(text === '⬅️ Hủy'){
-  delete state[ctx.from.id]
-  return mainMenu(ctx)
- }
-
- if(!s) return
-
-
-// RESET CONFIRM
-
- if(s.step === "reset_confirm"){
-
-  if(text === '✅ XÁC NHẬN RESET'){
-   await db.query("TRUNCATE TABLE customers RESTART IDENTITY")
+  if(text === '⬅️ Hủy'){
    delete state[ctx.from.id]
-   ctx.reply("✅ Đã reset toàn bộ database!")
    return mainMenu(ctx)
   }
 
- }
+  if(!s) return
 
 
-// DELETE
+  // ── RESET CONFIRM ──────────────────────────────
 
- if(s.step === "delete_select"){
-
-  await db.query("DELETE FROM customers WHERE name=$1",[text])
-
-  delete state[ctx.from.id]
-
-  ctx.reply("🗑 Đã xóa")
-
-  return mainMenu(ctx)
-
- }
+  if(s.step === "reset_confirm"){
+   if(text === '✅ XÁC NHẬN RESET'){
+    await db.query("TRUNCATE TABLE customers RESTART IDENTITY")
+    delete state[ctx.from.id]
+    ctx.reply("✅ Đã reset toàn bộ database!")
+    return mainMenu(ctx)
+   }
+   return
+  }
 
 
-// EDIT SELECT USER
+  // ── DELETE ─────────────────────────────────────
 
- if(s.step === "edit_select_user"){
-
-  s.name = text
-
-  s.step = "edit_field"
-
-  return ctx.reply("Chọn field cần sửa:", editKeyboard)
-
- }
+  if(s.step === "delete_select"){
+   await db.query("DELETE FROM customers WHERE name=$1",[text])
+   delete state[ctx.from.id]
+   ctx.reply("🗑 Đã xóa")
+   return mainMenu(ctx)
+  }
 
 
-// EDIT FIELD
+  // ── EDIT SELECT USER ───────────────────────────
 
- if(s.step === "edit_field"){
-
-  s.field = text
-
-  s.step = "edit_value"
-
-  return ctx.reply("Nhập ngày (dd/mm/yyyy) hoặc giá trị mới:")
-
- }
+  if(s.step === "edit_select_user"){
+   s.name = text
+   s.step = "edit_field"
+   return ctx.reply("Chọn field cần sửa:", editKeyboard)
+  }
 
 
-// EDIT VALUE
+  // ── EDIT FIELD ─────────────────────────────────
 
- if(s.step === "edit_value"){
+  if(s.step === "edit_field"){
+   s.field = text
+   s.step = "edit_value"
 
-  if(s.field === "Tên")
-   await db.query("UPDATE customers SET name=$1 WHERE name=$2",[text,s.name])
+   if(s.field === "Ngày bắt đầu" || s.field === "Ngày hết hạn")
+    return ctx.reply("Nhập ngày (dd/mm/yyyy):")
 
-  if(s.field === "Gmail")
-   await db.query("UPDATE customers SET gmail=$1 WHERE name=$2",[text,s.name])
+   if(s.field === "Số tháng")
+    return ctx.reply("Nhập số tháng (1-120):")
 
-  if(s.field === "Liên hệ")
-   await db.query("UPDATE customers SET contact=$1 WHERE name=$2",[text,s.name])
+   return ctx.reply("Nhập giá trị mới:")
+  }
 
-  if(s.field === "Số tháng"){
+
+  // ── EDIT VALUE ─────────────────────────────────
+
+  if(s.step === "edit_value"){
+
+   if(s.field === "Tên"){
+    if(!isValidText(text))
+     return ctx.reply("❌ Tên không được để trống. Nhập lại:")
+    await db.query("UPDATE customers SET name=$1 WHERE name=$2",[text,s.name])
+   }
+
+   if(s.field === "Gmail"){
+    if(!isValidText(text))
+     return ctx.reply("❌ Gmail không được để trống. Nhập lại:")
+    await db.query("UPDATE customers SET gmail=$1 WHERE name=$2",[text,s.name])
+   }
+
+   if(s.field === "Liên hệ"){
+    if(!isValidText(text))
+     return ctx.reply("❌ Liên hệ không được để trống. Nhập lại:")
+    await db.query("UPDATE customers SET contact=$1 WHERE name=$2",[text,s.name])
+   }
+
+   if(s.field === "Số tháng"){
+    if(!isValidMonths(text))
+     return ctx.reply("❌ Số tháng không hợp lệ. Nhập số nguyên từ 1-120:")
+    const months = parseInt(text)
+    const start = new Date()
+    const expiry = new Date(start.getTime()+months*30*86400000)
+    await db.query(
+     "UPDATE customers SET start_date=$1, expiry_date=$2 WHERE name=$3",
+     [start,expiry,s.name]
+    )
+   }
+
+   if(s.field === "Ngày bắt đầu"){
+    if(!isValidDate(text))
+     return ctx.reply("❌ Ngày không hợp lệ. Nhập đúng định dạng dd/mm/yyyy\nVí dụ: 15/06/2025")
+    const d = parseDate(text)
+    await db.query("UPDATE customers SET start_date=$1 WHERE name=$2",[d,s.name])
+   }
+
+   if(s.field === "Ngày hết hạn"){
+    if(!isValidDate(text))
+     return ctx.reply("❌ Ngày không hợp lệ. Nhập đúng định dạng dd/mm/yyyy\nVí dụ: 15/06/2025")
+    const d = parseDate(text)
+    await db.query("UPDATE customers SET expiry_date=$1 WHERE name=$2",[d,s.name])
+   }
+
+   delete state[ctx.from.id]
+   ctx.reply("✅ Đã cập nhật")
+   return mainMenu(ctx)
+  }
+
+
+  // ── ADD FLOW ───────────────────────────────────
+
+  if(s.step === "add_service"){
+   s.service = text
+   s.step = "add_name"
+   return ctx.reply("Tên khách:")
+  }
+
+  if(s.step === "add_name"){
+   if(!isValidText(text))
+    return ctx.reply("❌ Tên không được để trống. Nhập lại:")
+   s.name = text
+   s.step = "add_gmail"
+   return ctx.reply("Gmail:")
+  }
+
+  if(s.step === "add_gmail"){
+   if(!isValidText(text))
+    return ctx.reply("❌ Gmail không được để trống. Nhập lại:")
+   s.gmail = text
+   s.step = "add_contact"
+   return ctx.reply("Liên hệ:")
+  }
+
+  if(s.step === "add_contact"){
+   if(!isValidText(text))
+    return ctx.reply("❌ Liên hệ không được để trống. Nhập lại:")
+   s.contact = text
+   s.step = "add_start"
+   return ctx.reply("Ngày bắt đầu (dd/mm/yyyy):\nVí dụ: 15/06/2025")
+  }
+
+  if(s.step === "add_start"){
+   if(!isValidDate(text))
+    return ctx.reply("❌ Ngày không hợp lệ!\nNhập đúng định dạng dd/mm/yyyy\nVí dụ: 15/06/2025")
+   s.start = parseDate(text)
+   s.step = "add_months"
+   return ctx.reply("Số tháng (1-120):")
+  }
+
+  if(s.step === "add_months"){
+   if(!isValidMonths(text))
+    return ctx.reply("❌ Số tháng không hợp lệ!\nNhập số nguyên từ 1 đến 120:")
 
    const months = parseInt(text)
-
-   const start = new Date()
-
+   const start = s.start
    const expiry = new Date(start.getTime()+months*30*86400000)
 
    await db.query(
-    "UPDATE customers SET start_date=$1, expiry_date=$2 WHERE name=$3",
-    [start,expiry,s.name]
+    `INSERT INTO customers(service,name,gmail,contact,start_date,expiry_date)
+     VALUES($1,$2,$3,$4,$5,$6)`,
+    [s.service,s.name,s.gmail,s.contact,start,expiry]
    )
+
+   delete state[ctx.from.id]
+   ctx.reply("✅ Đã thêm")
+   return mainMenu(ctx)
   }
 
-  if(s.field === "Ngày bắt đầu"){
 
-   const d=parseDate(text)
+  // ── VIEW SERVICE ───────────────────────────────
 
-   await db.query(
-    "UPDATE customers SET start_date=$1 WHERE name=$2",
-    [d,s.name]
-   )
+  if(s.step === "view_service"){
+   await showService(ctx,text)
+   delete state[ctx.from.id]
+   return mainMenu(ctx)
   }
-
-  if(s.field === "Ngày hết hạn"){
-
-   const d=parseDate(text)
-
-   await db.query(
-    "UPDATE customers SET expiry_date=$1 WHERE name=$2",
-    [d,s.name]
-   )
-  }
-
-  delete state[ctx.from.id]
-
-  ctx.reply("✅ Đã cập nhật")
-
-  return mainMenu(ctx)
-
- }
-
-
-// ADD FLOW
-
- if(s.step === "add_service"){
-
-  s.service=text
-  s.step="add_name"
-
-  return ctx.reply("Tên khách:")
-
- }
-
- if(s.step === "add_name"){
-
-  s.name=text
-  s.step="add_gmail"
-
-  return ctx.reply("Gmail:")
-
- }
-
- if(s.step === "add_gmail"){
-
-  s.gmail=text
-  s.step="add_contact"
-
-  return ctx.reply("Liên hệ:")
-
- }
-
- if(s.step === "add_contact"){
-
-  s.contact=text
-  s.step="add_start"
-
-  return ctx.reply("Ngày bắt đầu (dd/mm/yyyy):")
-
- }
-
- if(s.step === "add_start"){
-
-  s.start=parseDate(text)
-  s.step="add_months"
-
-  return ctx.reply("Số tháng:")
-
- }
-
- if(s.step === "add_months"){
-
-  const months=parseInt(text)
-
-  const start=s.start
-
-  const expiry=new Date(start.getTime()+months*30*86400000)
-
-  await db.query(
-   `INSERT INTO customers(service,name,gmail,contact,start_date,expiry_date)
-    VALUES($1,$2,$3,$4,$5,$6)`,
-   [s.service,s.name,s.gmail,s.contact,start,expiry]
-  )
-
-  delete state[ctx.from.id]
-
-  ctx.reply("✅ Đã thêm")
-
-  return mainMenu(ctx)
-
- }
-
-
-// VIEW SERVICE
-
- if(s.step==="view_service"){
-
-  await showService(ctx,text)
-
-  delete state[ctx.from.id]
-
-  return mainMenu(ctx)
-
- }
 
  }catch(err){
   console.error("TEXT HANDLER ERROR:", err)
@@ -431,7 +411,7 @@ bot.on('text', async ctx=>{
 
 async function showService(ctx,service){
 
- const res=await db.query(
+ const res = await db.query(
   "SELECT * FROM customers WHERE service=$1 ORDER BY expiry_date",
   [service]
  )
@@ -439,30 +419,25 @@ async function showService(ctx,service){
  if(!res.rows.length)
   return ctx.reply("Không có khách")
 
- let msg=`📋 ${service}\n━━━━━━━━━━━━━━`
+ let msg = `📋 ${service}\n━━━━━━━━━━━━━━`
 
- const now=Date.now()
+ const now = Date.now()
 
  res.rows.forEach(u=>{
+  const diff = Math.ceil((new Date(u.expiry_date)-now)/86400000)
+  let icon = "🟢"
+  if(diff<=1) icon = "🔴"
+  else if(diff<=3) icon = "🟠"
 
-  const diff=Math.ceil((new Date(u.expiry_date)-now)/86400000)
-
-  let icon="🟢"
-
-  if(diff<=1) icon="🔴"
-  else if(diff<=3) icon="🟠"
-
-  msg+=`\n\n${icon} ${u.name}
+  msg += `\n\n${icon} ${u.name}
 📧 ${u.gmail}
 📞 ${u.contact}
 📅 ${format(u.start_date)}
 ⏰ ${format(u.expiry_date)}
 ━━━━━━━━━━━━━━`
-
  })
 
  ctx.reply(msg)
-
 }
 
 
@@ -470,16 +445,13 @@ async function showService(ctx,service){
 
 cron.schedule('0 9 * * *', async ()=>{
 
- const res=await db.query("SELECT * FROM customers")
-
- const now=new Date()
+ const res = await db.query("SELECT * FROM customers")
+ const now = new Date()
 
  for(const u of res.rows){
-
-  const diff=Math.ceil((new Date(u.expiry_date)-now)/86400000)
+  const diff = Math.ceil((new Date(u.expiry_date)-now)/86400000)
 
   if(diff===3){
-
    bot.telegram.sendMessage(
     ADMIN_ID,
 `⚠️ Sắp hết hạn
@@ -504,23 +476,18 @@ ${format(u.expiry_date)}`
 // ================= DATE =================
 
 function parseDate(text){
-
- const p=text.split("/")
-
- return new Date(p[2],p[1]-1,p[0])
-
+ const p = text.trim().split("/")
+ return new Date(parseInt(p[2]), parseInt(p[1])-1, parseInt(p[0]))
 }
 
 function format(d){
-
  return new Date(d).toLocaleDateString("vi-VN",{timeZone:"Asia/Ho_Chi_Minh"})
-
 }
 
 
 // ================= HTTP =================
 
-const PORT=process.env.PORT||3000
+const PORT = process.env.PORT || 3000
 
 http.createServer((req,res)=>{
  res.writeHead(200)
