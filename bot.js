@@ -33,6 +33,11 @@ async function initDB(){
   expiry_date TIMESTAMP
  )
  `)
+ await db.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS service TEXT`)
+ await db.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS gmail TEXT`)
+ await db.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS contact TEXT`)
+ await db.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS start_date TIMESTAMP`)
+ await db.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS expiry_date TIMESTAMP`)
 }
 
 initDB()
@@ -41,7 +46,6 @@ initDB()
 // ================= VALIDATION =================
 
 function isValidDate(text){
- // Phải đúng định dạng dd/mm/yyyy
  if(!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(text.trim())) return false
  const p = text.trim().split("/")
  const d = parseInt(p[0])
@@ -50,7 +54,6 @@ function isValidDate(text){
  if(m < 1 || m > 12) return false
  if(d < 1 || d > 31) return false
  if(y < 2000 || y > 2100) return false
- // Kiểm tra ngày thực tế hợp lệ
  const date = new Date(y, m-1, d)
  if(date.getFullYear() !== y || date.getMonth() !== m-1 || date.getDate() !== d) return false
  return true
@@ -266,7 +269,7 @@ bot.on('text', async ctx=>{
    s.step = "edit_value"
 
    if(s.field === "Ngày bắt đầu" || s.field === "Ngày hết hạn")
-    return ctx.reply("Nhập ngày (dd/mm/yyyy):")
+    return ctx.reply("Nhập ngày (dd/mm/yyyy):\nVí dụ: 15/06/2025")
 
    if(s.field === "Số tháng")
     return ctx.reply("Nhập số tháng (1-120):")
@@ -299,7 +302,7 @@ bot.on('text', async ctx=>{
 
    if(s.field === "Số tháng"){
     if(!isValidMonths(text))
-     return ctx.reply("❌ Số tháng không hợp lệ. Nhập số nguyên từ 1-120:")
+     return ctx.reply("❌ Số tháng không hợp lệ!\nNhập số nguyên từ 1-120:")
     const months = parseInt(text)
     const start = new Date()
     const expiry = new Date(start.getTime()+months*30*86400000)
@@ -311,14 +314,14 @@ bot.on('text', async ctx=>{
 
    if(s.field === "Ngày bắt đầu"){
     if(!isValidDate(text))
-     return ctx.reply("❌ Ngày không hợp lệ. Nhập đúng định dạng dd/mm/yyyy\nVí dụ: 15/06/2025")
+     return ctx.reply("❌ Ngày không hợp lệ!\nNhập đúng định dạng dd/mm/yyyy\nVí dụ: 15/06/2025")
     const d = parseDate(text)
     await db.query("UPDATE customers SET start_date=$1 WHERE name=$2",[d,s.name])
    }
 
    if(s.field === "Ngày hết hạn"){
     if(!isValidDate(text))
-     return ctx.reply("❌ Ngày không hợp lệ. Nhập đúng định dạng dd/mm/yyyy\nVí dụ: 15/06/2025")
+     return ctx.reply("❌ Ngày không hợp lệ!\nNhập đúng định dạng dd/mm/yyyy\nVí dụ: 15/06/2025")
     const d = parseDate(text)
     await db.query("UPDATE customers SET expiry_date=$1 WHERE name=$2",[d,s.name])
    }
