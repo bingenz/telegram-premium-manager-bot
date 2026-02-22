@@ -5,336 +5,251 @@ require('dotenv').config()
 const { Telegraf, Markup } = require('telegraf')
 const { Pool } = require('pg')
 const cron = require('node-cron')
+const ExcelJS = require('exceljs')
+const fs = require('fs')
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
-
 const ADMIN_ID = Number(process.env.ADMIN_ID)
 
-// PostgreSQL
 const db = new Pool({
  connectionString: process.env.DATABASE_URL,
  ssl: { rejectUnauthorized: false }
 })
 
-// ======================
-// DATABASE INIT
-// ======================
-
 async function initDB(){
-
  await db.query(`
  CREATE TABLE IF NOT EXISTS customers(
   id SERIAL PRIMARY KEY,
   service TEXT,
   name TEXT,
+  gmail TEXT,
   contact TEXT,
   start_date TIMESTAMP,
   expiry_date TIMESTAMP
  )
  `)
-
 }
-
 initDB()
-
-// ======================
-// MENU
-// ======================
 
 bot.use((ctx,next)=>{
  if(ctx.from.id !== ADMIN_ID) return
  next()
 })
 
-bot.start((ctx)=>{
-
+bot.start(ctx=>{
  ctx.reply(
-"👑 PREMIUM MANAGER",
-Markup.keyboard([
-['📋 Kiểm tra khách'],
-['➕ Thêm khách','🗑 Xóa khách']
-]).resize()
-)
-
+ "👑 PREMIUM MANAGER",
+ Markup.keyboard([
+ ['📋 ChatGPT','📋 YouTube','📋 CapCut'],
+ ['➕ Thêm khách','🗑 Xóa khách'],
+ ['📊 Thống kê','📥 Export Excel']
+ ]).resize()
+ )
 })
-
-// ======================
-// STATE
-// ======================
 
 let state = {}
 
-// ======================
-// ADD CUSTOMER
-// ======================
-
 bot.hears('➕ Thêm khách', ctx=>{
-
- state[ctx.from.id] = {
-  step: 1,
-  data: {}
- }
-
- ctx.reply("Loại dịch vụ (ChatGPT / YouTube / CapCut)?")
-
+ state[ctx.from.id] = { step: "service" }
+ ctx.reply(
+ "Chọn dịch vụ:",
+ Markup.keyboard([
+ ['ChatGPT','YouTube','CapCut']
+ ]).resize()
+ )
 })
 
-// ======================
-// DELETE CUSTOMER
-// ======================
+bot.hears(['ChatGPT','YouTube','CapCut'], ctx=>{
+ const s = state[ctx.from.id]
+ if(!s || s.step !== "service") return
+ s.service = ctx.message.text
+ s.step = "name"
+ ctx.reply("Tên khách?")
+})
+
+bot.on('text', async ctx=>{
+ const s = state[ctx.from.id]
+ if(!s) return
+
+ if(s.step === "name"){
+  s.name = ctx.message.text
+  s.step = "gmail"
+  return ctx.reply("Gmail khách dùng?")
+ }
+
+ if(s.step === "gmail"){
+  s.gmail = ctx.message.text
+  s.step = "contact"
+  return ctx.reply("Link Facebook hoặc tên Zalo?")
+ }
+
+ if(s.step === "contact"){
+  s.contact = ctx.message.text
+  s.step = "months"
+  return ctx.reply("Số tháng đăng ký?")
+ }
+
+ if(s.step === "months"){
+  const months = parseInt(ctx.message.text)
+  const start = new Date()
+  const expiry = new Date(start.getTime() + months*30*86400000)
+
+  await db.query(
+   "INSERT INTO customers(service,name,gmail,contact,start_date,expiry_date) VALUES($1,$2,$3,$4,$5,$6)",
+   [s.service,s.name,s.gmail,s.contact,start,expiry]
+  )
+
+  delete state[ctx.from.id]
+  ctx.reply("✅ Đã thêm khách")
+ }
+})
 
 bot.hears('🗑 Xóa khách', ctx=>{
-
- state[ctx.from.id] = {
-  step: "delete"
- }
-
+ state[ctx.from.id] = { step: "delete" }
  ctx.reply("Nhập tên khách cần xóa")
-
 })
 
-// ======================
-// LIST CUSTOMER
-// ======================
+bot.on('text', async ctx=>{
+ const s = state[ctx.from.id]
+ if(!s || s.step !== "delete") return
 
-bot.hears('📋 Kiểm tra khách', async ctx=>{
+ await db.query("DELETE FROM customers WHERE name=$1",[ctx.message.text])
+ delete state[ctx.from.id]
+ ctx.reply("🗑 Đã xóa khách")
+})
 
+async function show(service, ctx){
  const res = await db.query(
-  "SELECT * FROM customers ORDER BY expiry_date"
+  "SELECT * FROM customers WHERE service=$1 ORDER BY expiry_date",
+  [service]
  )
 
- if(res.rows.length === 0){
+ if(!res.rows.length)
+  return ctx.reply(`Không có khách ${service}`)
 
-  ctx.reply("Không có khách")
-
-  return
- }
-
- let msg = "📋 DANH SÁCH KHÁCH\n"
+ let msg = `📋 DANH SÁCH ${service}\n━━━━━━━━━━━━━━`
 
  const now = Date.now()
 
  for(const u of res.rows){
+  const diff = Math.ceil((new Date(u.expiry_date)-now)/86400000)
 
-  const diff =
-   Math.ceil(
-    (new Date(u.expiry_date) - now)
-    / 86400000
-   )
-
-  let status = "🟢"
-
-  if(diff <= 1) status = "🔴"
-  else if(diff <= 3) status = "🟠"
+  let icon="🟢"
+  if(diff<=1) icon="🔴"
+  else if(diff<=3) icon="🟠"
 
   msg += `
 
-${status} ${u.name}
-
-📦 ${u.service}
-
-📅 Start:
-${formatDate(u.start_date)}
-
-⏰ Exp:
-${formatDate(u.expiry_date)}
-
+${icon} ${u.name}
+📧 ${u.gmail}
 📞 ${u.contact}
-
-`
-
+📅 ${format(u.start_date)}
+⏰ ${format(u.expiry_date)}
+━━━━━━━━━━━━━━`
  }
 
  ctx.reply(msg)
+}
 
+bot.hears('📋 ChatGPT', ctx=>show('ChatGPT',ctx))
+bot.hears('📋 YouTube', ctx=>show('YouTube',ctx))
+bot.hears('📋 CapCut', ctx=>show('CapCut',ctx))
+
+bot.hears('📊 Thống kê', async ctx=>{
+ const service = await db.query(
+  "SELECT service, COUNT(*) total FROM customers GROUP BY service"
+ )
+
+ const gmail = await db.query(
+  "SELECT gmail, COUNT(*) total FROM customers GROUP BY gmail"
+ )
+
+ let msg="📊 THỐNG KÊ\n"
+
+ service.rows.forEach(r=>{
+  msg+=`${r.service}: ${r.total}\n`
+ })
+
+ msg+="\nTheo Gmail:\n"
+
+ gmail.rows.forEach(r=>{
+  msg+=`${r.gmail}: ${r.total}\n`
+ })
+
+ ctx.reply(msg)
 })
 
-// ======================
-// TEXT HANDLER
-// ======================
+bot.hears('📥 Export Excel', async ctx=>{
 
-bot.on('text', async ctx=>{
+ const res = await db.query(
+  "SELECT * FROM customers ORDER BY service, expiry_date"
+ )
 
- const s = state[ctx.from.id]
+ if(!res.rows.length)
+  return ctx.reply("Không có dữ liệu")
 
- if(!s) return
+ const wb = new ExcelJS.Workbook()
+ const ws = wb.addWorksheet("Customers")
 
- // STEP 1
- if(s.step === 1){
+ ws.columns=[
+ {header:'Service',key:'service',width:15},
+ {header:'Name',key:'name',width:20},
+ {header:'Gmail',key:'gmail',width:30},
+ {header:'Contact',key:'contact',width:30},
+ {header:'Start',key:'start',width:15},
+ {header:'Expiry',key:'expiry',width:15}
+ ]
 
-  s.data.service = ctx.message.text
+ res.rows.forEach(u=>{
+  ws.addRow({
+   service:u.service,
+   name:u.name,
+   gmail:u.gmail,
+   contact:u.contact,
+   start:format(u.start_date),
+   expiry:format(u.expiry_date)
+  })
+ })
 
-  s.step = 2
-
-  ctx.reply("Tên khách?")
-
-  return
-
- }
-
- // STEP 2
- if(s.step === 2){
-
-  s.data.name = ctx.message.text
-
-  s.step = 3
-
-  ctx.reply("Link Facebook hoặc tên Zalo?")
-
-  return
-
- }
-
- // STEP 3
- if(s.step === 3){
-
-  s.data.contact = ctx.message.text
-
-  s.step = 4
-
-  ctx.reply("Số tháng đăng ký?")
-
-  return
-
- }
-
- // STEP 4 SAVE
- if(s.step === 4){
-
-  const months = parseInt(ctx.message.text)
-
-  const start = new Date()
-
-  const expiry =
-   new Date(
-    start.getTime()
-    + months * 30 * 86400000
-   )
-
-  await db.query(`
-   INSERT INTO customers
-   (service,name,contact,start_date,expiry_date)
-   VALUES($1,$2,$3,$4,$5)
-  `,
-  [
-   s.data.service,
-   s.data.name,
-   s.data.contact,
-   start,
-   expiry
-  ])
-
-  delete state[ctx.from.id]
-
-  ctx.reply("✅ Đã thêm khách")
-
-  return
-
- }
-
- // DELETE
- if(s.step === "delete"){
-
-  await db.query(
-   "DELETE FROM customers WHERE name=$1",
-   [ctx.message.text]
-  )
-
-  delete state[ctx.from.id]
-
-  ctx.reply("🗑 Đã xóa khách")
-
- }
-
+ const file="customers.xlsx"
+ await wb.xlsx.writeFile(file)
+ await ctx.replyWithDocument({source:file})
+ fs.unlinkSync(file)
 })
 
-// ======================
-// CRON JOB
-// ======================
+cron.schedule('0 9 * * *', async ()=>{
 
-cron.schedule(
-'0 9 * * *',
-async ()=>{
-
- const res =
-  await db.query(
-   "SELECT * FROM customers"
-  )
-
+ const res = await db.query("SELECT * FROM customers")
  const now = new Date()
 
  for(const u of res.rows){
+  const diff=Math.ceil((new Date(u.expiry_date)-now)/86400000)
 
-  const diff =
-   Math.ceil(
-    (new Date(u.expiry_date)-now)
-    / 86400000
-   )
-
-  // REMIND
-  if(diff === 3){
-
+  if(diff===3){
    bot.telegram.sendMessage(
     ADMIN_ID,
-
-`⚠️ Sắp hết hạn 3 ngày
+`⚠️ Sắp hết hạn
 
 👤 ${u.name}
-
 📦 ${u.service}
 
-⏰ ${formatDate(u.expiry_date)}
+📧 ${u.gmail}
+📞 ${u.contact}
 
-📞 Liên hệ:
-${u.contact}
-`
-   )
-
+⏰ ${format(u.expiry_date)}`)
   }
 
-  // AUTO DELETE
-  if(diff < 0){
-
-   await db.query(
-    "DELETE FROM customers WHERE id=$1",
-    [u.id]
-   )
-
+  if(diff<0){
+   await db.query("DELETE FROM customers WHERE id=$1",[u.id])
   }
-
  }
 
-},
-{
- timezone: "Asia/Ho_Chi_Minh"
-}
-)
+},{timezone:"Asia/Ho_Chi_Minh"})
 
-// ======================
-// HELPER
-// ======================
-
-function formatDate(date){
-
- return new Date(date)
- .toLocaleDateString(
-  "vi-VN",
-  {
-   timeZone:
-   "Asia/Ho_Chi_Minh"
-  }
- )
-
+function format(d){
+ return new Date(d).toLocaleDateString("vi-VN",{timeZone:"Asia/Ho_Chi_Minh"})
 }
 
-// ======================
-// START BOT
-// ======================
-
-bot.launch({
- dropPendingUpdates: true
-})
-
+bot.launch({dropPendingUpdates:true})
 setInterval(()=>{},1000)
-
 console.log("Bot running OK")
