@@ -435,8 +435,7 @@ async function showService(ctx,service){
   msg += `\n\n${icon} ${u.name}
 📧 ${u.gmail}
 📞 ${u.contact}
-📅 ${format(u.start_date)}
-⏰ ${format(u.expiry_date)}
+📅 Thời hạn: ${format(u.start_date)} - ${format(u.expiry_date)}
 ━━━━━━━━━━━━━━`
  })
 
