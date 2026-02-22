@@ -1,10 +1,10 @@
-const db = require('./db')
+const db=require('./db')
 
 let state={}
 
 module.exports=(bot)=>{
 
-bot.command('add',ctx=>{
+bot.hears('➕ Thêm khách', ctx=>{
 
  state[ctx.from.id]={step:1,data:{}}
  ctx.reply("Tên khách?")
@@ -27,14 +27,14 @@ bot.on('text', async ctx=>{
 
   s.data.contact_channel=ctx.message.text
   s.step++
-  return ctx.reply("Link FB (hoặc bỏ qua)?")
+  return ctx.reply("Link FB?")
  }
 
  if(s.step==3){
 
   s.data.contact_link=ctx.message.text
   s.step++
-  return ctx.reply("Chọn dịch vụ: YouTube / ChatGPT / CapCut")
+  return ctx.reply("Service: YouTube / ChatGPT / CapCut")
  }
 
  if(s.step==4){
@@ -46,7 +46,7 @@ bot.on('text', async ctx=>{
 
  if(s.step==5){
 
-  s.data.account_email=ctx.message.text
+  s.data.gmail_owner=ctx.message.text
   s.step++
   return ctx.reply("Số tháng?")
  }
@@ -56,22 +56,24 @@ bot.on('text', async ctx=>{
   const months=parseInt(ctx.message.text)
 
   const start=new Date()
-  const expiry=new Date(start.getTime()+months*30*86400000)
+
+  const expiry=new Date(
+   start.getTime() + months*30*86400000
+  )
 
   await db.query(`
   INSERT INTO customers
-  (name,contact_channel,contact_link,service,
-   account_email,start_date,expiry_date,months)
-  VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+  (name,contact_channel,contact_link,
+   service,gmail_owner,start_date,expiry_date)
+  VALUES($1,$2,$3,$4,$5,$6,$7)
   `,[
    s.data.name,
    s.data.contact_channel,
    s.data.contact_link,
    s.data.service,
-   s.data.account_email,
+   s.data.gmail_owner,
    start,
-   expiry,
-   months
+   expiry
   ])
 
   delete state[ctx.from.id]
