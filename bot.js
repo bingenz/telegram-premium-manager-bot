@@ -51,7 +51,8 @@ function mainMenu(ctx){
    ['🗑 Xóa khách'],
    ['✏️ Sửa khách'],
    ['📊 Thống kê'],
-   ['📥 Export Excel']
+   ['📥 Export Excel'],
+   ['🔴 Reset DB']
   ]).resize()
  )
 
@@ -188,6 +189,23 @@ bot.hears('📥 Export Excel', async ctx=>{
 })
 
 
+// ================= RESET DB =================
+
+bot.hears('🔴 Reset DB', ctx=>{
+
+ state[ctx.from.id] = { step: "reset_confirm" }
+
+ ctx.reply(
+  "⚠️ Bạn có chắc muốn XÓA TOÀN BỘ dữ liệu không?\nHành động này KHÔNG THỂ HOÀN TÁC!",
+  Markup.keyboard([
+   ['✅ XÁC NHẬN RESET'],
+   ['⬅️ Hủy']
+  ]).resize()
+ )
+
+})
+
+
 // ================= TEXT HANDLER =================
 
 bot.on('text', async ctx=>{
@@ -202,6 +220,20 @@ bot.on('text', async ctx=>{
  }
 
  if(!s) return
+
+
+// RESET CONFIRM
+
+ if(s.step === "reset_confirm"){
+
+  if(text === '✅ XÁC NHẬN RESET'){
+   await db.query("TRUNCATE TABLE customers RESTART IDENTITY")
+   delete state[ctx.from.id]
+   ctx.reply("✅ Đã reset toàn bộ database!")
+   return mainMenu(ctx)
+  }
+
+ }
 
 
 // DELETE
