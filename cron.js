@@ -40,7 +40,7 @@ cron.schedule('0 9 * * *', async ()=>{
    [
     {
      text:"Liên hệ FB",
-     url:u.contact_link
+     url: u.contact_link || "https://facebook.com"
     }
    ]
   ]
