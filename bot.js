@@ -36,6 +36,7 @@ async function initDB(){
   await db.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS gmail TEXT`)
   await db.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS start_date TIMESTAMP`)
   await db.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS expiry_date TIMESTAMP`)
+  await db.query(`ALTER TABLE customers DROP COLUMN IF EXISTS contact`)
 }
 
 initDB()
@@ -482,4 +483,3 @@ bot.launch({dropPendingUpdates:true})
 setInterval(()=>{},1000)
 
 console.log("Bot running OK")
-
