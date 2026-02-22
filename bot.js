@@ -256,14 +256,19 @@ const PORT = process.env.PORT || 3000
 
 http.createServer((req, res) => {
 
- if(req.url === "/"){
-  res.writeHead(200, { 'Content-Type': 'text/plain' })
-  res.end("Bot is running")
- }
+ res.writeHead(200, { 'Content-Type': 'text/plain' })
+ res.end("Bot is running")
 
 }).listen(PORT, () => {
+
  console.log("HTTP server running on port", PORT)
+
 })
-bot.launch({dropPendingUpdates:true})
+
+bot.launch({
+ dropPendingUpdates:true
+})
+
 setInterval(()=>{},1000)
+
 console.log("Bot running OK")
