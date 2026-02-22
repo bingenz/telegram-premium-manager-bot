@@ -6,12 +6,12 @@ const bot = new Telegraf(process.env.BOT_TOKEN)
 const ADMIN_ID = Number(process.env.ADMIN_ID)
 
 const db = require('./db')
+
 require('./cron')(bot)
 require('./add')(bot)
 
 bot.use((ctx,next)=>{
- if(ctx.from.id !== ADMIN_ID)
-  return ctx.reply("❌ Không có quyền")
+ if(ctx.from.id !== ADMIN_ID) return
  next()
 })
 
@@ -22,8 +22,7 @@ bot.start((ctx)=>{
 Markup.keyboard([
 ['📺 YouTube Premium','🤖 ChatGPT Plus'],
 ['🎬 CapCut Pro'],
-['➕ Thêm khách','🗑 Xóa khách'],
-['📊 Thống kê']
+['➕ Thêm khách','📊 Thống kê']
 ]).resize()
 )
 
@@ -42,22 +41,19 @@ async function showService(ctx, service){
  ORDER BY gmail_owner, expiry_date
  `,[service])
 
- if(res.rows.length==0)
+ if(!res.rows.length)
   return ctx.reply("Không có khách")
 
  let msg=`📋 ${service}\n`
 
- let currentGmail=null
-
+ let current=null
  const now=Date.now()
 
  res.rows.forEach(u=>{
 
-  if(currentGmail!==u.gmail_owner){
-
-   currentGmail=u.gmail_owner
-
-   msg+=`\n📧 Gmail: ${currentGmail}\n`
+  if(current!==u.gmail_owner){
+   current=u.gmail_owner
+   msg+=`\n📧 ${current}\n`
   }
 
   const diff=Math.ceil(
@@ -72,9 +68,7 @@ async function showService(ctx, service){
   msg+=`
 ${status} ${u.name}
 📱 ${u.contact_channel}
-📅 Start: ${formatVN(u.start_date)}
-⏰ Exp: ${formatVN(u.expiry_date)}
-🔗 ${u.contact_link || ""}
+⏰ ${formatVN(u.expiry_date)}
 `
  })
 
@@ -90,5 +84,13 @@ function formatVN(date){
 
 }
 
-bot.launch()
-console.log("Bot running")
+bot.launch({
+ dropPendingUpdates:true
+})
+
+bot.catch(console.error)
+
+process.once('SIGINT',()=>bot.stop())
+process.once('SIGTERM',()=>bot.stop())
+
+console.log("Bot running okok")
