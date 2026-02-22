@@ -1,102 +1,83 @@
-
 const db = require('./db')
 
-let state = {}
+let state={}
 
-module.exports = (bot)=>{
+module.exports=(bot)=>{
 
-bot.command('add', ctx=>{
- state[ctx.from.id] = { step:1, data:{} }
+bot.command('add',ctx=>{
+
+ state[ctx.from.id]={step:1,data:{}}
  ctx.reply("Tên khách?")
+
 })
 
 bot.on('text', async ctx=>{
 
- if(!state[ctx.from.id]) return
-
- const s = state[ctx.from.id]
+ const s=state[ctx.from.id]
+ if(!s) return
 
  if(s.step==1){
-  s.data.name = ctx.message.text
-  s.step=2
-  return ctx.reply("Kênh liên hệ (fb/zalo/phone)?")
+
+  s.data.name=ctx.message.text
+  s.step++
+  return ctx.reply("FB/Zalo/Phone?")
  }
 
  if(s.step==2){
-  s.data.channel = ctx.message.text
-  s.step=3
-  return ctx.reply("Tên liên hệ?")
+
+  s.data.contact_channel=ctx.message.text
+  s.step++
+  return ctx.reply("Link FB (hoặc bỏ qua)?")
  }
 
  if(s.step==3){
-  s.data.contact_name = ctx.message.text
-  s.step=4
-  return ctx.reply("Link liên hệ?")
+
+  s.data.contact_link=ctx.message.text
+  s.step++
+  return ctx.reply("Chọn dịch vụ: YouTube / ChatGPT / CapCut")
  }
 
  if(s.step==4){
-  s.data.contact_link = ctx.message.text
-  s.step=5
-  return ctx.reply("Dịch vụ (YouTube/ChatGPT/CapCut)?")
- }
 
- if(s.step==5){
-  s.data.service = ctx.message.text
-  s.step=6
+  s.data.service=ctx.message.text
+  s.step++
   return ctx.reply("Gmail cấp cho khách?")
  }
 
- if(s.step==6){
-  s.data.email = ctx.message.text
-  s.step=7
-  return ctx.reply("Thiết bị?")
- }
+ if(s.step==5){
 
- if(s.step==7){
-  s.data.device = ctx.message.text
-  s.step=8
-  return ctx.reply("Vị trí?")
- }
-
- if(s.step==8){
-  s.data.location = ctx.message.text
-  s.step=9
+  s.data.account_email=ctx.message.text
+  s.step++
   return ctx.reply("Số tháng?")
  }
 
- if(s.step==9){
-  s.data.months = Number(ctx.message.text)
-  s.step=10
-  return ctx.reply("Giá?")
- }
+ if(s.step==6){
 
- if(s.step==10){
+  const months=parseInt(ctx.message.text)
 
-  const expiry = new Date()
-  expiry.setMonth(expiry.getMonth()+s.data.months)
+  const start=new Date()
+  const expiry=new Date(start.getTime()+months*30*86400000)
 
   await db.query(`
   INSERT INTO customers
-  (name,contact_channel,contact_name,contact_link,service,
-   account_email,device,location,months,start_date,expiry_date,price)
-  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),$10,$11)
+  (name,contact_channel,contact_link,service,
+   account_email,start_date,expiry_date,months)
+  VALUES($1,$2,$3,$4,$5,$6,$7,$8)
   `,[
    s.data.name,
-   s.data.channel,
-   s.data.contact_name,
+   s.data.contact_channel,
    s.data.contact_link,
    s.data.service,
-   s.data.email,
-   s.data.device,
-   s.data.location,
-   s.data.months,
+   s.data.account_email,
+   start,
    expiry,
-   ctx.message.text
+   months
   ])
 
   delete state[ctx.from.id]
 
-  ctx.reply("✅ Đã thêm khách")
+  ctx.reply("✅ Đã thêm")
+
  }
 
 })
