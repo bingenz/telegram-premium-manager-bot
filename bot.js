@@ -37,6 +37,9 @@ async function initDB(){
   await db.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS start_date TIMESTAMP`)
   await db.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS expiry_date TIMESTAMP`)
   await db.query(`ALTER TABLE customers DROP COLUMN IF EXISTS contact`)
+
+  // Migration: đổi tên dịch vụ cũ sang tên mới
+  await db.query(`UPDATE customers SET service='ChatGPT GO' WHERE service='ChatGPT'`)
 }
 
 initDB()
