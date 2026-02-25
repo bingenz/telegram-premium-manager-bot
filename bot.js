@@ -442,7 +442,7 @@ cron.schedule('0 9 * * *', async ()=>{
   for(const u of res.rows){
     const diff = Math.ceil((new Date(u.expiry_date)-now)/86400000)
 
-    if(diff===3){
+    if(diff <= 3 && diff > 0){
       bot.telegram.sendMessage(ADMIN_ID,
 `⚠️ Sắp hết hạn
 
