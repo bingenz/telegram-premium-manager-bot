@@ -44,7 +44,6 @@ initDB()
 
 // ================= VALIDATION =================
 
-// Nhận ddmmyy hoặc ddmmyyyy
 function parseShortDate(text){
   const t = text.trim().replace(/\D/g,'')
   let d, m, y
@@ -101,9 +100,11 @@ bot.start(ctx=>mainMenu(ctx))
 
 let state = {}
 
+// ── Keyboard dịch vụ: thêm ChatGPT Plus, đổi ChatGPT → ChatGPT GO
 const serviceKeyboard =
   Markup.keyboard([
-    ['ChatGPT'],
+    ['ChatGPT Plus'],
+    ['ChatGPT GO'],
     ['YouTube'],
     ['CapCut'],
     ['⬅️ Hủy']
@@ -132,9 +133,9 @@ bot.hears('➕ Thêm khách', ctx=>{
 
 bot.hears('🗑 Xóa khách', async ctx=>{
   try{
-    const res = await db.query("SELECT name FROM customers ORDER BY name")
+    const res = await db.query("SELECT name, service FROM customers ORDER BY service, name")
     if(!res.rows.length) return ctx.reply("Không có khách")
-    const buttons = res.rows.map(u=>[u.name])
+    const buttons = res.rows.map(u=>[`${u.name} (${u.service})`])
     buttons.push(['⬅️ Hủy'])
     state[ctx.from.id] = { step: "delete_select" }
     ctx.reply("Chọn khách cần xóa:", Markup.keyboard(buttons).resize())
@@ -146,9 +147,9 @@ bot.hears('🗑 Xóa khách', async ctx=>{
 
 bot.hears('✏️ Sửa khách', async ctx=>{
   try{
-    const res = await db.query("SELECT name FROM customers ORDER BY name")
+    const res = await db.query("SELECT name, service FROM customers ORDER BY service, name")
     if(!res.rows.length) return ctx.reply("Không có khách")
-    const buttons = res.rows.map(u=>[u.name])
+    const buttons = res.rows.map(u=>[`${u.name} (${u.service})`])
     buttons.push(['⬅️ Hủy'])
     state[ctx.from.id] = { step: "edit_select_user" }
     ctx.reply("Chọn khách cần sửa:", Markup.keyboard(buttons).resize())
@@ -175,7 +176,7 @@ bot.hears('📥 Export Excel', async ctx=>{
     const ws = wb.addWorksheet("Customers")
 
     ws.columns=[
-      {header:'Service',key:'service',width:15},
+      {header:'Service',key:'service',width:18},
       {header:'Name',key:'name',width:20},
       {header:'Gmail',key:'gmail',width:30},
       {header:'Start',key:'start',width:15},
@@ -245,7 +246,11 @@ bot.on('text', async ctx=>{
     // ── DELETE ─────────────────────────────────────
 
     if(s.step === "delete_select"){
-      await db.query("DELETE FROM customers WHERE name=$1",[text])
+      // Parse tên từ format "Tên (Dịch vụ)"
+      const match = text.match(/^(.+)\s\((.+)\)$/)
+      if(!match) return ctx.reply("❌ Không nhận dạng được. Thử lại.")
+      const [, name, service] = match
+      await db.query("DELETE FROM customers WHERE name=$1 AND service=$2",[name, service])
       delete state[ctx.from.id]
       ctx.reply("🗑 Đã xóa")
       return mainMenu(ctx)
@@ -255,7 +260,11 @@ bot.on('text', async ctx=>{
     // ── EDIT SELECT USER ───────────────────────────
 
     if(s.step === "edit_select_user"){
-      s.name = text
+      const match = text.match(/^(.+)\s\((.+)\)$/)
+      if(!match) return ctx.reply("❌ Không nhận dạng được. Thử lại.")
+      const [, name, service] = match
+      s.name = name
+      s.service = service
       s.step = "edit_field"
       return ctx.reply("Chọn field cần sửa:", editKeyboard)
     }
@@ -283,12 +292,12 @@ bot.on('text', async ctx=>{
 
       if(s.field === "Tên"){
         if(!isValidText(text)) return ctx.reply("❌ Tên không được để trống. Nhập lại:")
-        await db.query("UPDATE customers SET name=$1 WHERE name=$2",[text,s.name])
+        await db.query("UPDATE customers SET name=$1 WHERE name=$2 AND service=$3",[text,s.name,s.service])
       }
 
       if(s.field === "Gmail"){
         if(!isValidText(text)) return ctx.reply("❌ Gmail không được để trống. Nhập lại:")
-        await db.query("UPDATE customers SET gmail=$1 WHERE name=$2",[text,s.name])
+        await db.query("UPDATE customers SET gmail=$1 WHERE name=$2 AND service=$3",[text,s.name,s.service])
       }
 
       if(s.field === "Số tháng"){
@@ -297,21 +306,21 @@ bot.on('text', async ctx=>{
         const start = new Date()
         const expiry = new Date(start.getTime()+months*30*86400000)
         await db.query(
-          "UPDATE customers SET start_date=$1, expiry_date=$2 WHERE name=$3",
-          [start,expiry,s.name]
+          "UPDATE customers SET start_date=$1, expiry_date=$2 WHERE name=$3 AND service=$4",
+          [start,expiry,s.name,s.service]
         )
       }
 
       if(s.field === "Ngày bắt đầu"){
         const d = parseShortDate(text)
         if(!d) return ctx.reply("❌ Ngày không hợp lệ!\nVí dụ: 210226 hoặc 21022026")
-        await db.query("UPDATE customers SET start_date=$1 WHERE name=$2",[d,s.name])
+        await db.query("UPDATE customers SET start_date=$1 WHERE name=$2 AND service=$3",[d,s.name,s.service])
       }
 
       if(s.field === "Ngày hết hạn"){
         const d = parseShortDate(text)
         if(!d) return ctx.reply("❌ Ngày không hợp lệ!\nVí dụ: 210226 hoặc 21022026")
-        await db.query("UPDATE customers SET expiry_date=$1 WHERE name=$2",[d,s.name])
+        await db.query("UPDATE customers SET expiry_date=$1 WHERE name=$2 AND service=$3",[d,s.name,s.service])
       }
 
       delete state[ctx.from.id]
@@ -322,8 +331,10 @@ bot.on('text', async ctx=>{
 
     // ── ADD FLOW ───────────────────────────────────
 
-    // Bước 1: Chọn dịch vụ
     if(s.step === "add_service"){
+      // Kiểm tra dịch vụ hợp lệ
+      const validServices = ['ChatGPT Plus', 'ChatGPT GO', 'YouTube', 'CapCut']
+      if(!validServices.includes(text)) return ctx.reply("❌ Chọn dịch vụ hợp lệ:", serviceKeyboard)
       s.service = text
       s.step = "add_form"
       return ctx.reply(
@@ -343,7 +354,6 @@ abc@gmail.com
       )
     }
 
-    // Bước 2: Nhận form điền
     if(s.step === "add_form"){
       const lines = text.split('\n').map(l=>l.trim()).filter(l=>l.length>0)
 
@@ -389,7 +399,7 @@ abc@gmail.com
     // ── VIEW SERVICE ───────────────────────────────
 
     if(s.step === "view_service"){
-      await showService(ctx,text)
+      await showService(ctx, text)
       delete state[ctx.from.id]
       return mainMenu(ctx)
     }
@@ -405,13 +415,13 @@ abc@gmail.com
 
 // ================= SHOW =================
 
-async function showService(ctx,service){
+async function showService(ctx, service){
   const res = await db.query(
     "SELECT * FROM customers WHERE service=$1 ORDER BY expiry_date",
     [service]
   )
 
-  if(!res.rows.length) return ctx.reply("Không có khách")
+  if(!res.rows.length) return ctx.reply(`Không có khách nào dùng ${service}`)
 
   let msg = `📋 ${service}\n━━━━━━━━━━━━━━`
 
@@ -446,14 +456,14 @@ cron.schedule('0 9 * * *', async ()=>{
       bot.telegram.sendMessage(ADMIN_ID,
 `⚠️ Sắp hết hạn
 
-${u.name}
-${u.service}
-${u.gmail}
+👤 ${u.name}
+📦 ${u.service}
+📧 ${u.gmail}
 
-${format(u.expiry_date)}`)
+📅 HSD: ${format(u.expiry_date)}`)
     }
 
-    if(diff<0)
+    if(diff < 0)
       await db.query("DELETE FROM customers WHERE id=$1",[u.id])
   }
 },{timezone:"Asia/Ho_Chi_Minh"})
@@ -483,3 +493,4 @@ bot.launch({dropPendingUpdates:true})
 setInterval(()=>{},1000)
 
 console.log("Bot running OK")
+
