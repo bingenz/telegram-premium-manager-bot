@@ -521,24 +521,33 @@ abc@gmail.com
 cron.schedule('0 9 * * *', async () => {
   try{
     const res = await db.query('SELECT * FROM customers')
+    const WARN_DAYS = [7, 3, 2, 1]
 
-    // ── 1. Gộp tất cả khách sắp hết hạn vào 1 tin nhắn
-    const soonList = res.rows.filter(u => {
-      const diff = daysFromNow(u.expiry_date)
-      return diff > 0 && diff <= 3
-    })
+    // ── 1. Khách sắp hết hạn (7, 3, 2, 1 ngày)
+    const soonList = res.rows.filter(u => WARN_DAYS.includes(daysFromNow(u.expiry_date)))
 
     if(soonList.length){
-      const lines = soonList.map(u =>
-        `👤 ${u.name} · ${u.service}\n📧 ${u.gmail}\n📅 HSD: ${format(u.expiry_date)} · còn ${daysFromNow(u.expiry_date)} ngày`
-      ).join('\n\n')
+      const lines = soonList.map(u => {
+        const diff = daysFromNow(u.expiry_date)
+        return `👤 ${u.name} · ${u.service}\n📧 ${u.gmail}\n📅 HSD: ${format(u.expiry_date)} · còn ${diff} ngày`
+      }).join('\n\n')
       await bot.telegram.sendMessage(ADMIN_ID,
         `⚠️ SẮP HẾT HẠN (${soonList.length})\n━━━━━━━━━━━━━━\n\n${lines}`
       )
     }
 
-    // ── 2. Gửi danh sách khách đã hết hạn
-    await sendExpiredList(ADMIN_ID, false)
+    // ── 2. Khách đã hết hạn
+    const expiredList = res.rows.filter(u => daysFromNow(u.expiry_date) <= 0)
+
+    if(expiredList.length){
+      const lines = expiredList.map(u => {
+        const over = -daysFromNow(u.expiry_date)
+        return `🔴 ${u.name} · ${u.service}\n📧 ${u.gmail}\n📅 HSD: ${format(u.expiry_date)} · quá ${over} ngày`
+      }).join('\n\n')
+      await bot.telegram.sendMessage(ADMIN_ID,
+        `🔴 ĐÃ HẾT HẠN (${expiredList.length})\n━━━━━━━━━━━━━━\n\n${lines}`
+      )
+    }
 
   }catch(err){
     console.error('CRON ERROR:', err)
