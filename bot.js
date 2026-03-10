@@ -70,6 +70,16 @@ function isValidText(text){
   return text && text.trim().length > 0
 }
 
+function parseDateVN(text){
+  const m = text.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+  if(!m) return null
+  const d = parseInt(m[1]), mo = parseInt(m[2]), y = parseInt(m[3])
+  if(mo<1||mo>12||d<1||d>31||y<2000||y>2100) return null
+  const date = new Date(y, mo-1, d)
+  if(date.getFullYear()!==y||date.getMonth()!==mo-1||date.getDate()!==d) return null
+  return date
+}
+
 
 // ================= CONSTANTS =================
 
@@ -78,12 +88,6 @@ const SERVICE_LIST = ['ChatGPT Plus', 'ChatGPT GO', 'YouTube', 'CapCut']
 const serviceKeyboard = Markup.keyboard([
   ['ChatGPT Plus', 'ChatGPT GO'],
   ['YouTube', 'CapCut'],
-  ['⬅️ Hủy']
-]).resize()
-
-const editKeyboard = Markup.keyboard([
-  ['Tên', 'Gmail'],
-  ['Số tháng', 'Ngày bắt đầu', 'Ngày hết hạn'],
   ['⬅️ Hủy']
 ]).resize()
 
@@ -186,13 +190,46 @@ bot.action('del_abort', async ctx => {
 
 bot.hears('✏️ Sửa khách', async ctx => {
   try{
-    const res = await db.query('SELECT name, service FROM customers ORDER BY service, name')
+    const res = await db.query('SELECT id, name, service FROM customers ORDER BY service, name')
     if(!res.rows.length) return ctx.reply('Không có khách')
-    const buttons = res.rows.map(u => [`${u.name} (${u.service})`])
-    buttons.push(['⬅️ Hủy'])
-    state[ctx.from.id] = { step: 'edit_select_user' }
-    ctx.reply('Chọn khách cần sửa:', Markup.keyboard(buttons).resize())
+    ctx.reply(
+      'Chọn khách cần sửa:',
+      Markup.inlineKeyboard(
+        res.rows.map(u => [Markup.button.callback(`${u.name} (${u.service})`, `edit_pick:${u.id}`)])
+      )
+    )
   }catch(err){ console.error(err); ctx.reply('❌ Lỗi: ' + err.message) }
+})
+
+bot.action(/^edit_pick:(\d+)$/, async ctx => {
+  try{
+    const id = parseInt(ctx.match[1])
+    const res = await db.query('SELECT * FROM customers WHERE id=$1', [id])
+    if(!res.rows.length){
+      await ctx.answerCbQuery('Không tìm thấy khách!')
+      return ctx.editMessageText('❌ Khách này không còn tồn tại.')
+    }
+    const u = res.rows[0]
+    await ctx.answerCbQuery()
+    state[ctx.from.id] = { step: 'edit_paste', id }
+    await ctx.editMessageText(
+`✏️ THÔNG TIN HIỆN TẠI
+
+Copy toàn bộ, sửa dòng cần đổi rồi gửi lại:
+
+Tên: ${u.name}
+Gmail: ${u.gmail}
+Ngày bắt đầu: ${format(u.start_date)}
+Ngày hết hạn: ${format(u.expiry_date)}`,
+      Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'edit_abort')]])
+    )
+  }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
+})
+
+bot.action('edit_abort', async ctx => {
+  delete state[ctx.from.id]
+  await ctx.answerCbQuery('Đã hủy')
+  await ctx.editMessageText('↩️ Đã hủy thao tác sửa.')
 })
 
 
@@ -393,59 +430,58 @@ bot.on('text', async ctx => {
     if(!s) return
 
 
-    // ── EDIT SELECT USER ───────────────────────────
+    // ── EDIT PASTE ─────────────────────────────────
 
-    if(s.step === 'edit_select_user'){
-      const match = text.match(/^(.+)\s\((.+)\)$/)
-      if(!match) return ctx.reply('❌ Không nhận dạng được. Thử lại.')
-      const [, name, service] = match
-      s.name = name; s.service = service; s.step = 'edit_field'
-      return ctx.reply('Chọn field cần sửa:', editKeyboard)
-    }
-
-
-    // ── EDIT FIELD ─────────────────────────────────
-
-    if(s.step === 'edit_field'){
-      s.field = text; s.step = 'edit_value'
-      if(s.field === 'Ngày bắt đầu' || s.field === 'Ngày hết hạn')
-        return ctx.reply('Nhập ngày (ddmmyy hoặc ddmmyyyy):\nVí dụ: 210226 hoặc 21022026')
-      if(s.field === 'Số tháng')
-        return ctx.reply('Nhập số tháng (1-120):')
-      return ctx.reply('Nhập giá trị mới:')
-    }
-
-
-    // ── EDIT VALUE ─────────────────────────────────
-
-    if(s.step === 'edit_value'){
-      if(s.field === 'Tên'){
-        if(!isValidText(text)) return ctx.reply('❌ Tên không được để trống. Nhập lại:')
-        await db.query('UPDATE customers SET name=$1 WHERE name=$2 AND service=$3', [text, s.name, s.service])
-      } else if(s.field === 'Gmail'){
-        if(!isValidText(text)) return ctx.reply('❌ Gmail không được để trống. Nhập lại:')
-        await db.query('UPDATE customers SET gmail=$1 WHERE name=$2 AND service=$3', [text, s.name, s.service])
-      } else if(s.field === 'Số tháng'){
-        if(!isValidMonths(text)) return ctx.reply('❌ Số tháng không hợp lệ!\nNhập số nguyên từ 1-120:')
-        const months = parseInt(text)
-        const start = new Date()
-        const expiry = new Date(start.getTime() + months * 30 * 86400000)
-        await db.query(
-          'UPDATE customers SET start_date=$1, expiry_date=$2 WHERE name=$3 AND service=$4',
-          [start, expiry, s.name, s.service]
-        )
-      } else if(s.field === 'Ngày bắt đầu'){
-        const d = parseShortDate(text)
-        if(!d) return ctx.reply('❌ Ngày không hợp lệ!\nVí dụ: 210226 hoặc 21022026')
-        await db.query('UPDATE customers SET start_date=$1 WHERE name=$2 AND service=$3', [d, s.name, s.service])
-      } else if(s.field === 'Ngày hết hạn'){
-        const d = parseShortDate(text)
-        if(!d) return ctx.reply('❌ Ngày không hợp lệ!\nVí dụ: 210226 hoặc 21022026')
-        await db.query('UPDATE customers SET expiry_date=$1 WHERE name=$2 AND service=$3', [d, s.name, s.service])
+    if(s.step === 'edit_paste'){
+      const { id } = s
+      const parsed = {}
+      for(const line of text.split('\n')){
+        const m = line.match(/^(.+?):\s*(.+)$/)
+        if(!m) continue
+        const key = m[1].trim()
+        const val = m[2].trim()
+        if(key === 'Tên') parsed.name = val
+        else if(key === 'Gmail') parsed.gmail = val
+        else if(key === 'Ngày bắt đầu') parsed.start_date = parseDateVN(val)
+        else if(key === 'Ngày hết hạn') parsed.expiry_date = parseDateVN(val)
       }
 
+      if('start_date' in parsed && !parsed.start_date)
+        return ctx.reply('❌ Ngày bắt đầu không hợp lệ!\nĐịnh dạng: dd/mm/yyyy (vd: 01/02/2026)')
+      if('expiry_date' in parsed && !parsed.expiry_date)
+        return ctx.reply('❌ Ngày hết hạn không hợp lệ!\nĐịnh dạng: dd/mm/yyyy (vd: 01/03/2026)')
+
+      const cur = await db.query('SELECT * FROM customers WHERE id=$1', [id])
+      if(!cur.rows.length){
+        delete state[ctx.from.id]
+        ctx.reply('❌ Không tìm thấy khách!')
+        return mainMenu(ctx)
+      }
+      const u = cur.rows[0]
+
+      const updates = []; const values = []; let i = 1
+      if(parsed.name      && parsed.name !== u.name)                               { updates.push(`name=$${i++}`);        values.push(parsed.name) }
+      if(parsed.gmail     && parsed.gmail !== u.gmail)                             { updates.push(`gmail=$${i++}`);       values.push(parsed.gmail) }
+      if(parsed.start_date && format(parsed.start_date) !== format(u.start_date)) { updates.push(`start_date=$${i++}`);  values.push(parsed.start_date) }
+      if(parsed.expiry_date && format(parsed.expiry_date) !== format(u.expiry_date)){ updates.push(`expiry_date=$${i++}`); values.push(parsed.expiry_date) }
+
+      if(!updates.length){
+        delete state[ctx.from.id]
+        ctx.reply('ℹ️ Không có thay đổi nào.')
+        return mainMenu(ctx)
+      }
+
+      values.push(id)
+      await db.query(`UPDATE customers SET ${updates.join(', ')} WHERE id=$${i}`, values)
+
+      const lines = []
+      if(parsed.name       && parsed.name !== u.name)                                lines.push(`👤 Tên: ${u.name} → ${parsed.name}`)
+      if(parsed.gmail      && parsed.gmail !== u.gmail)                              lines.push(`📧 Gmail: ${u.gmail} → ${parsed.gmail}`)
+      if(parsed.start_date && format(parsed.start_date) !== format(u.start_date))   lines.push(`📅 Ngày bắt đầu: ${format(u.start_date)} → ${format(parsed.start_date)}`)
+      if(parsed.expiry_date && format(parsed.expiry_date) !== format(u.expiry_date)) lines.push(`📅 Ngày hết hạn: ${format(u.expiry_date)} → ${format(parsed.expiry_date)}`)
+
       delete state[ctx.from.id]
-      ctx.reply('✅ Đã cập nhật')
+      ctx.reply(`✅ Đã cập nhật\n\n${lines.join('\n')}`)
       return mainMenu(ctx)
     }
 
@@ -570,4 +606,5 @@ bot.launch({ dropPendingUpdates: true })
 setInterval(() => {}, 1000)
 
 console.log('Bot running OK')
+
 
