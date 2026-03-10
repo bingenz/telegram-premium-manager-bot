@@ -32,6 +32,15 @@ async function initDB(){
     )
   `)
   await db.query(`ALTER TABLE customers DROP COLUMN IF EXISTS contact`)
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS reminders(
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER REFERENCES customers(id) ON DELETE CASCADE,
+      remind_at TIMESTAMP,
+      note TEXT,
+      done BOOLEAN DEFAULT FALSE
+    )
+  `)
 }
 
 initDB()
@@ -41,6 +50,25 @@ initDB()
 
 function format(d){
   return new Date(d).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })
+}
+
+function formatDT(d){
+  return new Date(d).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false })
+}
+
+function parseDateTimeFull(text){
+  // accepts: "dd/mm/yyyy HH:MM" or "dd/mm/yyyy" (defaults to 09:00)
+  const m = text.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/)
+  if(!m) return null
+  const d = parseInt(m[1]), mo = parseInt(m[2]), y = parseInt(m[3])
+  const hh = m[4] !== undefined ? parseInt(m[4]) : 9
+  const mm = m[5] !== undefined ? parseInt(m[5]) : 0
+  if(mo<1||mo>12||d<1||d>31||y<2000||y>2100||hh<0||hh>23||mm<0||mm>59) return null
+  // build in VN timezone offset +7
+  const utc = Date.UTC(y, mo-1, d, hh-7, mm)
+  const date = new Date(utc)
+  if(date < Date.now()) return null  // past date rejected
+  return date
 }
 
 function daysFromNow(d){
@@ -101,6 +129,7 @@ function mainMenu(ctx){
       ['➕ Thêm khách'],
       ['🗑 Xóa khách', '✏️ Sửa khách'],
       ['📊 Thống kê', '📋 Khách hết hạn'],
+      ['⏰ Hẹn giờ', '📋 Xem hẹn giờ'],
       ['📥 Export Excel', '🔴 Reset DB']
     ]).resize()
   )
@@ -487,6 +516,36 @@ bot.on('text', async ctx => {
     }
 
 
+    // ── HẸN GIỜ: NHẬP NGÀY GIỜ ──────────────────────
+
+    if(s.step === 'rem_datetime'){
+      const dt = parseDateTimeFull(text)
+      if(!dt) return ctx.reply('❌ Ngày giờ không hợp lệ hoặc đã qua!\nĐịnh dạng: dd/mm/yyyy HH:MM\nVí dụ: 15/03/2026 09:00')
+      s.remindAt = dt
+      s.step = 'rem_note'
+      return ctx.reply('Nhập ghi chú (hoặc gõ - để bỏ qua):')
+    }
+
+
+    // ── HẸN GIỜ: NHẬP GHI CHÚ ────────────────────────
+
+    if(s.step === 'rem_note'){
+      const note = text === '-' ? null : text.trim()
+      await db.query(
+        'INSERT INTO reminders(customer_id, remind_at, note) VALUES($1,$2,$3)',
+        [s.customerId, s.remindAt, note]
+      )
+      delete state[ctx.from.id]
+      ctx.reply(
+`✅ Đã đặt lịch hẹn!
+
+👤 ${s.customerName} (${s.customerService})
+📧 ${s.customerGmail}
+⏰ ${formatDT(s.remindAt)}${note ? '\n📝 ' + note : ''}`)
+      return mainMenu(ctx)
+    }
+
+
     // ── ADD SERVICE ────────────────────────────────
 
     if(s.step === 'add_service'){
@@ -553,6 +612,82 @@ abc@gmail.com
 })
 
 
+
+// ================= HẸN GIỜ =================
+
+bot.hears('⏰ Hẹn giờ', async ctx => {
+  try{
+    const res = await db.query('SELECT id, name, service FROM customers ORDER BY service, name')
+    if(!res.rows.length) return ctx.reply('Không có khách')
+    ctx.reply(
+      'Chọn khách cần hẹn giờ liên hệ:',
+      Markup.inlineKeyboard(
+        res.rows.map(u => [Markup.button.callback(`${u.name} (${u.service})`, `rem_pick:${u.id}`)])
+      )
+    )
+  }catch(err){ console.error(err); ctx.reply('❌ Lỗi: ' + err.message) }
+})
+
+bot.action(/^rem_pick:(\d+)$/, async ctx => {
+  try{
+    const id = parseInt(ctx.match[1])
+    const res = await db.query('SELECT * FROM customers WHERE id=$1', [id])
+    if(!res.rows.length){ await ctx.answerCbQuery('Không tìm thấy!'); return }
+    const u = res.rows[0]
+    await ctx.answerCbQuery()
+    state[ctx.from.id] = { step: 'rem_datetime', customerId: id, customerName: u.name, customerService: u.service, customerGmail: u.gmail }
+    await ctx.editMessageText(
+`⏰ HẸN GIỜ LIÊN HỆ
+
+👤 ${u.name} (${u.service})
+📧 ${u.gmail}
+
+Nhập ngày giờ hẹn:
+dd/mm/yyyy HH:MM
+Ví dụ: 15/03/2026 09:00
+
+(Bỏ giờ → mặc định 09:00)`)
+  }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
+})
+
+bot.hears('📋 Xem hẹn giờ', async ctx => {
+  try{
+    const res = await db.query(
+      `SELECT r.id, r.remind_at, r.note, c.name, c.service, c.gmail
+       FROM reminders r JOIN customers c ON r.customer_id = c.id
+       WHERE r.done = FALSE ORDER BY r.remind_at`
+    )
+    if(!res.rows.length) return ctx.reply('✅ Không có lịch hẹn nào đang chờ.')
+
+    const lines = res.rows.map(r => {
+      let s = `⏰ ${formatDT(r.remind_at)}\n👤 ${r.name} (${r.service})\n📧 ${r.gmail}`
+      if(r.note) s += `\n📝 ${r.note}`
+      return s
+    }).join('\n\n')
+
+    ctx.reply(
+      `📋 LỊCH HẸN ĐANG CHỜ (${res.rows.length})
+━━━━━━━━━━━━━━
+
+${lines}`,
+      Markup.inlineKeyboard(
+        res.rows.map(r => [Markup.button.callback(
+          `🗑 ${r.name} — ${formatDT(r.remind_at)}`, `rem_del:${r.id}`
+        )])
+      )
+    )
+  }catch(err){ console.error(err); ctx.reply('❌ Lỗi: ' + err.message) }
+})
+
+bot.action(/^rem_del:(\d+)$/, async ctx => {
+  try{
+    const id = parseInt(ctx.match[1])
+    await db.query('DELETE FROM reminders WHERE id=$1', [id])
+    await ctx.answerCbQuery('✅ Đã xóa lịch hẹn')
+    await ctx.editMessageText('🗑 Đã xóa lịch hẹn.')
+  }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
+})
+
 // ================= REMINDER =================
 
 cron.schedule('0 9 * * *', async () => {
@@ -590,6 +725,28 @@ cron.schedule('0 9 * * *', async () => {
     console.error('CRON ERROR:', err)
   }
 }, { timezone: 'Asia/Ho_Chi_Minh' })
+
+
+// ── Cron hẹn giờ: chạy mỗi phút ──────────────────
+
+cron.schedule('* * * * *', async () => {
+  try{
+    const res = await db.query(
+      `SELECT r.id, r.note, c.name, c.service, c.gmail
+       FROM reminders r JOIN customers c ON r.customer_id = c.id
+       WHERE r.done = FALSE AND r.remind_at <= NOW()`
+    )
+    for(const r of res.rows){
+      await bot.telegram.sendMessage(ADMIN_ID,
+`⏰ LỊCH HẸN LIÊN HỆ
+
+👤 ${r.name} (${r.service})
+📧 ${r.gmail}${r.note ? '\n📝 ' + r.note : ''}`
+      )
+      await db.query('UPDATE reminders SET done=TRUE WHERE id=$1', [r.id])
+    }
+  }catch(err){ console.error('REM CRON ERROR:', err) }
+})
 
 
 // ================= HTTP =================
