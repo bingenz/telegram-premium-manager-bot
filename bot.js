@@ -447,6 +447,82 @@ bot.action('reset_abort', async ctx => {
 
 // ================= TEXT HANDLER =================
 
+
+// ================= HẸN GIỜ =================
+
+bot.hears('⏰ Hẹn giờ', async ctx => {
+  try{
+    const res = await db.query('SELECT id, name, service FROM customers ORDER BY service, name')
+    if(!res.rows.length) return ctx.reply('Không có khách')
+    ctx.reply(
+      'Chọn khách cần hẹn giờ liên hệ:',
+      Markup.inlineKeyboard(
+        res.rows.map(u => [Markup.button.callback(`${u.name} (${u.service})`, `rem_pick:${u.id}`)])
+      )
+    )
+  }catch(err){ console.error(err); ctx.reply('❌ Lỗi: ' + err.message) }
+})
+
+bot.action(/^rem_pick:(\d+)$/, async ctx => {
+  try{
+    const id = parseInt(ctx.match[1])
+    const res = await db.query('SELECT * FROM customers WHERE id=$1', [id])
+    if(!res.rows.length){ await ctx.answerCbQuery('Không tìm thấy!'); return }
+    const u = res.rows[0]
+    await ctx.answerCbQuery()
+    state[ctx.from.id] = { step: 'rem_datetime', customerId: id, customerName: u.name, customerService: u.service, customerGmail: u.gmail }
+    await ctx.editMessageText(
+`⏰ HẸN GIỜ LIÊN HỆ
+
+👤 ${u.name} (${u.service})
+📧 ${u.gmail}
+
+Nhập ngày giờ hẹn:
+dd/mm/yyyy HH:MM
+Ví dụ: 15/03/2026 09:00
+
+(Bỏ giờ → mặc định 09:00)`)
+  }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
+})
+
+bot.hears('📋 Xem hẹn giờ', async ctx => {
+  try{
+    const res = await db.query(
+      `SELECT r.id, r.remind_at, r.note, c.name, c.service, c.gmail
+       FROM reminders r JOIN customers c ON r.customer_id = c.id
+       WHERE r.done = FALSE ORDER BY r.remind_at`
+    )
+    if(!res.rows.length) return ctx.reply('✅ Không có lịch hẹn nào đang chờ.')
+
+    const lines = res.rows.map(r => {
+      let s = `⏰ ${formatDT(r.remind_at)}\n👤 ${r.name} (${r.service})\n📧 ${r.gmail}`
+      if(r.note) s += `\n📝 ${r.note}`
+      return s
+    }).join('\n\n')
+
+    ctx.reply(
+      `📋 LỊCH HẸN ĐANG CHỜ (${res.rows.length})
+━━━━━━━━━━━━━━
+
+${lines}`,
+      Markup.inlineKeyboard(
+        res.rows.map(r => [Markup.button.callback(
+          `🗑 ${r.name} — ${formatDT(r.remind_at)}`, `rem_del:${r.id}`
+        )])
+      )
+    )
+  }catch(err){ console.error(err); ctx.reply('❌ Lỗi: ' + err.message) }
+})
+
+bot.action(/^rem_del:(\d+)$/, async ctx => {
+  try{
+    const id = parseInt(ctx.match[1])
+    await db.query('DELETE FROM reminders WHERE id=$1', [id])
+    await ctx.answerCbQuery('✅ Đã xóa lịch hẹn')
+    await ctx.editMessageText('🗑 Đã xóa lịch hẹn.')
+  }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
+})
+
 bot.on('text', async ctx => {
   try{
     const text = ctx.message.text.trim()
@@ -612,81 +688,6 @@ abc@gmail.com
 })
 
 
-
-// ================= HẸN GIỜ =================
-
-bot.hears('⏰ Hẹn giờ', async ctx => {
-  try{
-    const res = await db.query('SELECT id, name, service FROM customers ORDER BY service, name')
-    if(!res.rows.length) return ctx.reply('Không có khách')
-    ctx.reply(
-      'Chọn khách cần hẹn giờ liên hệ:',
-      Markup.inlineKeyboard(
-        res.rows.map(u => [Markup.button.callback(`${u.name} (${u.service})`, `rem_pick:${u.id}`)])
-      )
-    )
-  }catch(err){ console.error(err); ctx.reply('❌ Lỗi: ' + err.message) }
-})
-
-bot.action(/^rem_pick:(\d+)$/, async ctx => {
-  try{
-    const id = parseInt(ctx.match[1])
-    const res = await db.query('SELECT * FROM customers WHERE id=$1', [id])
-    if(!res.rows.length){ await ctx.answerCbQuery('Không tìm thấy!'); return }
-    const u = res.rows[0]
-    await ctx.answerCbQuery()
-    state[ctx.from.id] = { step: 'rem_datetime', customerId: id, customerName: u.name, customerService: u.service, customerGmail: u.gmail }
-    await ctx.editMessageText(
-`⏰ HẸN GIỜ LIÊN HỆ
-
-👤 ${u.name} (${u.service})
-📧 ${u.gmail}
-
-Nhập ngày giờ hẹn:
-dd/mm/yyyy HH:MM
-Ví dụ: 15/03/2026 09:00
-
-(Bỏ giờ → mặc định 09:00)`)
-  }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
-})
-
-bot.hears('📋 Xem hẹn giờ', async ctx => {
-  try{
-    const res = await db.query(
-      `SELECT r.id, r.remind_at, r.note, c.name, c.service, c.gmail
-       FROM reminders r JOIN customers c ON r.customer_id = c.id
-       WHERE r.done = FALSE ORDER BY r.remind_at`
-    )
-    if(!res.rows.length) return ctx.reply('✅ Không có lịch hẹn nào đang chờ.')
-
-    const lines = res.rows.map(r => {
-      let s = `⏰ ${formatDT(r.remind_at)}\n👤 ${r.name} (${r.service})\n📧 ${r.gmail}`
-      if(r.note) s += `\n📝 ${r.note}`
-      return s
-    }).join('\n\n')
-
-    ctx.reply(
-      `📋 LỊCH HẸN ĐANG CHỜ (${res.rows.length})
-━━━━━━━━━━━━━━
-
-${lines}`,
-      Markup.inlineKeyboard(
-        res.rows.map(r => [Markup.button.callback(
-          `🗑 ${r.name} — ${formatDT(r.remind_at)}`, `rem_del:${r.id}`
-        )])
-      )
-    )
-  }catch(err){ console.error(err); ctx.reply('❌ Lỗi: ' + err.message) }
-})
-
-bot.action(/^rem_del:(\d+)$/, async ctx => {
-  try{
-    const id = parseInt(ctx.match[1])
-    await db.query('DELETE FROM reminders WHERE id=$1', [id])
-    await ctx.answerCbQuery('✅ Đã xóa lịch hẹn')
-    await ctx.editMessageText('🗑 Đã xóa lịch hẹn.')
-  }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
-})
 
 // ================= REMINDER =================
 
