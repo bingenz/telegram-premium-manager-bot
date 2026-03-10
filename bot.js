@@ -213,15 +213,16 @@ bot.action(/^edit_pick:(\d+)$/, async ctx => {
     await ctx.answerCbQuery()
     state[ctx.from.id] = { step: 'edit_paste', id }
     await ctx.editMessageText(
-`✏️ THÔNG TIN HIỆN TẠI
+`✏️ THÔNG TIN HIỆN TẠI — ${u.name} (${u.service})
+Sửa dòng cần đổi rồi gửi lại:
 
-Copy toàn bộ, sửa dòng cần đổi rồi gửi lại:
-
+\`\`\`
 Tên: ${u.name}
 Gmail: ${u.gmail}
 Ngày bắt đầu: ${format(u.start_date)}
-Ngày hết hạn: ${format(u.expiry_date)}`,
-      Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'edit_abort')]])
+Ngày hết hạn: ${format(u.expiry_date)}
+\`\`\``,
+      { parse_mode: 'Markdown', reply_markup: Markup.inlineKeyboard([[Markup.button.callback('❌ Hủy', 'edit_abort')]]).reply_markup }
     )
   }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
 })
