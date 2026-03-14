@@ -56,23 +56,28 @@ function formatDT(d){
   return new Date(d).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false })
 }
 
+function daysFromNow(d){
+  return Math.ceil((new Date(d) - Date.now()) / 86400000)
+}
+
+// ✅ Tính tháng đúng theo calendar, không phải 30 ngày cứng
+function addMonths(date, months){
+  const d = new Date(date)
+  d.setMonth(d.getMonth() + months)
+  return d
+}
+
 function parseDateTimeFull(text){
-  // accepts: "dd/mm/yyyy HH:MM" or "dd/mm/yyyy" (defaults to 09:00)
   const m = text.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/)
   if(!m) return null
   const d = parseInt(m[1]), mo = parseInt(m[2]), y = parseInt(m[3])
   const hh = m[4] !== undefined ? parseInt(m[4]) : 9
   const mm = m[5] !== undefined ? parseInt(m[5]) : 0
   if(mo<1||mo>12||d<1||d>31||y<2000||y>2100||hh<0||hh>23||mm<0||mm>59) return null
-  // build in VN timezone offset +7
   const utc = Date.UTC(y, mo-1, d, hh-7, mm)
   const date = new Date(utc)
-  if(date < Date.now()) return null  // past date rejected
+  if(date < Date.now()) return null
   return date
-}
-
-function daysFromNow(d){
-  return Math.ceil((new Date(d) - Date.now()) / 86400000)
 }
 
 function parseShortDate(text){
@@ -89,15 +94,6 @@ function parseShortDate(text){
   return date
 }
 
-function isValidMonths(text){
-  const n = parseInt(text.trim())
-  return !isNaN(n) && n > 0 && n <= 120 && String(n) === text.trim()
-}
-
-function isValidText(text){
-  return text && text.trim().length > 0
-}
-
 function parseDateVN(text){
   const m = text.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
   if(!m) return null
@@ -108,10 +104,26 @@ function parseDateVN(text){
   return date
 }
 
+function isValidMonths(text){
+  const n = parseInt(text.trim())
+  return !isNaN(n) && n > 0 && n <= 120 && String(n) === text.trim()
+}
+
+function isValidText(text){
+  return text && text.trim().length > 0
+}
+
+// ✅ DB helper dùng chung — tránh lặp SELECT khắp nơi
+async function getCustomer(id){
+  const res = await db.query('SELECT * FROM customers WHERE id=$1', [id])
+  return res.rows[0] || null
+}
+
 
 // ================= CONSTANTS =================
 
 const SERVICE_LIST = ['ChatGPT Plus', 'ChatGPT GO', 'YouTube', 'CapCut']
+const STATE_TIMEOUT_MS = 10 * 60 * 1000  // 10 phút
 
 const serviceKeyboard = Markup.keyboard([
   ['ChatGPT Plus', 'ChatGPT GO'],
@@ -129,6 +141,7 @@ function mainMenu(ctx){
       ['➕ Thêm khách'],
       ['🗑 Xóa khách', '✏️ Sửa khách'],
       ['📊 Thống kê', '📋 Khách hết hạn'],
+      ['⏳ Sắp hết hạn'],
       ['⏰ Hẹn giờ', '📋 Xem hẹn giờ'],
       ['📥 Export Excel', '🔴 Reset DB']
     ]).resize()
@@ -143,20 +156,31 @@ bot.use((ctx, next) => {
 bot.start(ctx => mainMenu(ctx))
 
 
-// ================= STATE =================
+// ================= STATE (có timeout 10 phút) =================
 
 let state = {}
+
+function setState(userId, data){
+  if(state[userId]?._timer) clearTimeout(state[userId]._timer)
+  const timer = setTimeout(() => { delete state[userId] }, STATE_TIMEOUT_MS)
+  state[userId] = { ...data, _timer: timer }
+}
+
+function clearState(userId){
+  if(state[userId]?._timer) clearTimeout(state[userId]._timer)
+  delete state[userId]
+}
 
 
 // ================= ADD =================
 
 bot.hears('➕ Thêm khách', ctx => {
-  state[ctx.from.id] = { step: 'add_service' }
+  setState(ctx.from.id, { step: 'add_service' })
   ctx.reply('Chọn dịch vụ:', serviceKeyboard)
 })
 
 
-// ================= DELETE (inline, không cần state) =================
+// ================= DELETE =================
 
 bot.hears('🗑 Xóa khách', async ctx => {
   try{
@@ -174,12 +198,11 @@ bot.hears('🗑 Xóa khách', async ctx => {
 bot.action(/^del_pick:(\d+)$/, async ctx => {
   try{
     const id = parseInt(ctx.match[1])
-    const res = await db.query('SELECT * FROM customers WHERE id=$1', [id])
-    if(!res.rows.length){
+    const u = await getCustomer(id)
+    if(!u){
       await ctx.answerCbQuery('Không tìm thấy!')
       return ctx.editMessageText('❌ Khách này không còn tồn tại.')
     }
-    const u = res.rows[0]
     await ctx.answerCbQuery()
     await ctx.editMessageText(
 `⚠️ XÁC NHẬN XÓA?
@@ -198,13 +221,8 @@ bot.action(/^del_pick:(\d+)$/, async ctx => {
 bot.action(/^del_exec:(\d+)$/, async ctx => {
   try{
     const id = parseInt(ctx.match[1])
-    const res = await db.query('SELECT name FROM customers WHERE id=$1', [id])
-    if(res.rows.length){
-      await db.query('DELETE FROM customers WHERE id=$1', [id])
-      await ctx.answerCbQuery(`✅ Đã xóa ${res.rows[0].name}`)
-    } else {
-      await ctx.answerCbQuery('Khách đã bị xóa rồi!')
-    }
+    const res = await db.query('DELETE FROM customers WHERE id=$1 RETURNING name', [id])
+    await ctx.answerCbQuery(res.rows.length ? `✅ Đã xóa ${res.rows[0].name}` : 'Khách đã bị xóa rồi!')
     await ctx.editMessageText('🗑 Đã xóa khách.')
   }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
 })
@@ -233,14 +251,13 @@ bot.hears('✏️ Sửa khách', async ctx => {
 bot.action(/^edit_pick:(\d+)$/, async ctx => {
   try{
     const id = parseInt(ctx.match[1])
-    const res = await db.query('SELECT * FROM customers WHERE id=$1', [id])
-    if(!res.rows.length){
+    const u = await getCustomer(id)
+    if(!u){
       await ctx.answerCbQuery('Không tìm thấy khách!')
       return ctx.editMessageText('❌ Khách này không còn tồn tại.')
     }
-    const u = res.rows[0]
     await ctx.answerCbQuery()
-    state[ctx.from.id] = { step: 'edit_paste', id }
+    setState(ctx.from.id, { step: 'edit_paste', id })
     await ctx.editMessageText(
 `✏️ THÔNG TIN HIỆN TẠI — ${u.name} (${u.service})
 Sửa dòng cần đổi rồi gửi lại:
@@ -257,13 +274,13 @@ Ngày hết hạn: ${format(u.expiry_date)}
 })
 
 bot.action('edit_abort', async ctx => {
-  delete state[ctx.from.id]
+  clearState(ctx.from.id)
   await ctx.answerCbQuery('Đã hủy')
   await ctx.editMessageText('↩️ Đã hủy thao tác sửa.')
 })
 
 
-// ================= STATS (inline, không cần state) =================
+// ================= STATS =================
 
 bot.hears('📊 Thống kê', ctx => {
   ctx.reply(
@@ -281,16 +298,19 @@ bot.action(/^stats:(.+)$/, async ctx => {
       'SELECT * FROM customers WHERE service=$1 ORDER BY expiry_date', [service]
     )
     await ctx.answerCbQuery()
-
     if(!res.rows.length) return ctx.editMessageText(`Không có khách nào dùng ${service}`)
 
-    let msg = `📋 ${service}\n━━━━━━━━━━━━━━`
+    const total   = res.rows.length
+    const soon    = res.rows.filter(u => { const d = daysFromNow(u.expiry_date); return d > 0 && d <= 7 }).length
+    const expired = res.rows.filter(u => daysFromNow(u.expiry_date) <= 0).length
+
+    let msg = `📋 ${service}\n━━━━━━━━━━━━━━\nTổng: ${total} · 🟠 Sắp HH: ${soon} · 🔴 Đã HH: ${expired}\n━━━━━━━━━━━━━━`
     res.rows.forEach(u => {
       const diff = daysFromNow(u.expiry_date)
-      const icon = diff <= 0 ? '🔴' : diff <= 3 ? '🟠' : '🟢'
-      msg += `\n\n${icon} ${u.name}\n📧 ${u.gmail}\n📅 ${format(u.start_date)} → ${format(u.expiry_date)}\n━━━━━━━━━━━━━━`
+      const icon   = diff <= 0 ? '🔴' : diff <= 3 ? '🟠' : diff <= 7 ? '🟡' : '🟢'
+      const status = diff <= 0 ? `quá ${-diff} ngày` : `còn ${diff} ngày`
+      msg += `\n\n${icon} ${u.name}\n📧 ${u.gmail}\n📅 ${format(u.start_date)} → ${format(u.expiry_date)} (${status})\n━━━━━━━━━━━━━━`
     })
-
     await ctx.editMessageText(msg)
   }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
 })
@@ -303,50 +323,41 @@ function buildExpiredView(rows){
     msg: '✅ Không còn khách nào hết hạn!',
     keyboard: Markup.inlineKeyboard([])
   }
-
   const lines = rows.map(u => {
     const d = -daysFromNow(u.expiry_date)
     return `🔴 ${u.name} · ${u.service} · ${u.gmail} · quá ${d} ngày`
   }).join('\n')
-
   const msg = `📋 KHÁCH HẾT HẠN (${rows.length})\n━━━━━━━━━━━━━━\n${lines}\n━━━━━━━━━━━━━━\n👇 Bấm tên để xóa:`
-
   const keyboard = Markup.inlineKeyboard(
     rows.map(u => {
       const d = -daysFromNow(u.expiry_date)
       return [Markup.button.callback(`🗑 ${u.name} (${u.service}) — ${d} ngày`, `exp_pick:${u.id}`)]
     })
   )
-
   return { msg, keyboard }
 }
 
-async function sendExpiredList(target, isCtx = true){
+async function queryExpired(){
   const res = await db.query('SELECT * FROM customers WHERE expiry_date < NOW() ORDER BY expiry_date')
-  const { msg, keyboard } = buildExpiredView(res.rows)
-  if(isCtx){
-    await target.reply(msg, keyboard)
-  } else {
-    await bot.telegram.sendMessage(target, msg, { reply_markup: keyboard.reply_markup })
-  }
+  return res.rows
 }
 
 bot.hears('📋 Khách hết hạn', async ctx => {
-  try{ await sendExpiredList(ctx) }
-  catch(err){ console.error(err); ctx.reply('❌ Lỗi: ' + err.message) }
+  try{
+    const { msg, keyboard } = buildExpiredView(await queryExpired())
+    await ctx.reply(msg, keyboard)
+  }catch(err){ console.error(err); ctx.reply('❌ Lỗi: ' + err.message) }
 })
 
 bot.action(/^exp_pick:(\d+)$/, async ctx => {
   try{
     const id = parseInt(ctx.match[1])
-    const res = await db.query('SELECT * FROM customers WHERE id=$1', [id])
-    if(!res.rows.length){
+    const u = await getCustomer(id)
+    if(!u){
       await ctx.answerCbQuery('Khách này đã bị xóa!')
-      const all = await db.query('SELECT * FROM customers WHERE expiry_date < NOW() ORDER BY expiry_date')
-      const { msg, keyboard } = buildExpiredView(all.rows)
+      const { msg, keyboard } = buildExpiredView(await queryExpired())
       return ctx.editMessageText(msg, keyboard)
     }
-    const u = res.rows[0]
     const d = -daysFromNow(u.expiry_date)
     await ctx.answerCbQuery()
     await ctx.editMessageText(
@@ -367,15 +378,9 @@ bot.action(/^exp_pick:(\d+)$/, async ctx => {
 bot.action(/^exp_del:(\d+)$/, async ctx => {
   try{
     const id = parseInt(ctx.match[1])
-    const res = await db.query('SELECT name FROM customers WHERE id=$1', [id])
-    if(res.rows.length){
-      await db.query('DELETE FROM customers WHERE id=$1', [id])
-      await ctx.answerCbQuery(`✅ Đã xóa ${res.rows[0].name}`)
-    } else {
-      await ctx.answerCbQuery('Khách đã bị xóa rồi!')
-    }
-    const remaining = await db.query('SELECT * FROM customers WHERE expiry_date < NOW() ORDER BY expiry_date')
-    const { msg, keyboard } = buildExpiredView(remaining.rows)
+    const res = await db.query('DELETE FROM customers WHERE id=$1 RETURNING name', [id])
+    await ctx.answerCbQuery(res.rows.length ? `✅ Đã xóa ${res.rows[0].name}` : 'Khách đã bị xóa rồi!')
+    const { msg, keyboard } = buildExpiredView(await queryExpired())
     await ctx.editMessageText(msg, keyboard)
   }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
 })
@@ -383,9 +388,70 @@ bot.action(/^exp_del:(\d+)$/, async ctx => {
 bot.action('exp_back', async ctx => {
   try{
     await ctx.answerCbQuery()
-    const res = await db.query('SELECT * FROM customers WHERE expiry_date < NOW() ORDER BY expiry_date')
-    const { msg, keyboard } = buildExpiredView(res.rows)
+    const { msg, keyboard } = buildExpiredView(await queryExpired())
     await ctx.editMessageText(msg, keyboard)
+  }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
+})
+
+
+// ================= EXPIRING SOON =================
+
+const SOON_OPTIONS = [3, 7, 14, 30]
+
+function soonFilterKeyboard(active){
+  return Markup.inlineKeyboard([
+    SOON_OPTIONS.map(d =>
+      Markup.button.callback(d === active ? `✅ ${d}n` : `${d}n`, `soon:${d}`)
+    )
+  ])
+}
+
+async function sendExpiringSoon(target, days, isEdit = false){
+  const res = await db.query(
+    `SELECT * FROM customers
+     WHERE expiry_date > NOW()
+       AND expiry_date <= NOW() + ($1 || ' days')::INTERVAL
+     ORDER BY expiry_date`,
+    [days]
+  )
+  const rows = res.rows
+  const keyboard = soonFilterKeyboard(days)
+
+  if(!rows.length){
+    const msg = `✅ Không có khách nào hết hạn trong ${days} ngày tới.`
+    return isEdit ? target.editMessageText(msg, keyboard) : target.reply(msg, keyboard)
+  }
+
+  // Group theo service
+  const groups = {}
+  for(const u of rows){
+    if(!groups[u.service]) groups[u.service] = []
+    groups[u.service].push(u)
+  }
+
+  let msg = `⏳ SẮP HẾT HẠN — ${days} NGÀY TỚI (${rows.length} khách)\n━━━━━━━━━━━━━━\n`
+  for(const [svc, list] of Object.entries(groups)){
+    msg += `\n📦 ${svc} (${list.length})\n`
+    list.forEach(u => {
+      const d = daysFromNow(u.expiry_date)
+      const icon = d <= 1 ? '🔴' : d <= 3 ? '🟠' : '🟡'
+      msg += `${icon} ${u.name}\n   📧 ${u.gmail}\n   📅 HSD: ${format(u.expiry_date)} · còn ${d} ngày\n\n`
+    })
+    msg += '━━━━━━━━━━━━━━\n'
+  }
+
+  return isEdit ? target.editMessageText(msg, keyboard) : target.reply(msg, keyboard)
+}
+
+bot.hears('⏳ Sắp hết hạn', async ctx => {
+  try{ await sendExpiringSoon(ctx, 7) }
+  catch(err){ console.error(err); ctx.reply('❌ Lỗi: ' + err.message) }
+})
+
+bot.action(/^soon:(\d+)$/, async ctx => {
+  try{
+    await ctx.answerCbQuery()
+    await sendExpiringSoon(ctx, parseInt(ctx.match[1]), true)
   }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
 })
 
@@ -400,15 +466,17 @@ bot.hears('📥 Export Excel', async ctx => {
     const wb = new ExcelJS.Workbook()
     const ws = wb.addWorksheet('Customers')
     ws.columns = [
-      { header: 'Service', key: 'service', width: 18 },
-      { header: 'Name',    key: 'name',    width: 20 },
-      { header: 'Gmail',   key: 'gmail',   width: 30 },
-      { header: 'Start',   key: 'start',   width: 15 },
-      { header: 'Expiry',  key: 'expiry',  width: 15 }
+      { header: 'Service',        key: 'service', width: 18 },
+      { header: 'Name',           key: 'name',    width: 20 },
+      { header: 'Gmail',          key: 'gmail',   width: 30 },
+      { header: 'Start',          key: 'start',   width: 15 },
+      { header: 'Expiry',         key: 'expiry',  width: 15 },
+      { header: 'Còn lại (ngày)', key: 'days',    width: 16 }
     ]
     res.rows.forEach(u => ws.addRow({
       service: u.service, name: u.name, gmail: u.gmail,
-      start: format(u.start_date), expiry: format(u.expiry_date)
+      start: format(u.start_date), expiry: format(u.expiry_date),
+      days: daysFromNow(u.expiry_date)
     }))
 
     const file = 'customers.xlsx'
@@ -419,7 +487,7 @@ bot.hears('📥 Export Excel', async ctx => {
 })
 
 
-// ================= RESET DB (inline, không cần state) =================
+// ================= RESET DB =================
 
 bot.hears('🔴 Reset DB', ctx => {
   ctx.reply(
@@ -433,7 +501,7 @@ bot.hears('🔴 Reset DB', ctx => {
 
 bot.action('reset_exec', async ctx => {
   try{
-    await db.query('TRUNCATE TABLE customers RESTART IDENTITY')
+    await db.query('TRUNCATE TABLE customers, reminders RESTART IDENTITY CASCADE')
     await ctx.answerCbQuery('✅ Đã reset!')
     await ctx.editMessageText('✅ Đã xóa toàn bộ database!')
   }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
@@ -443,9 +511,6 @@ bot.action('reset_abort', async ctx => {
   await ctx.answerCbQuery('Đã hủy')
   await ctx.editMessageText('↩️ Đã hủy reset.')
 })
-
-
-// ================= TEXT HANDLER =================
 
 
 // ================= HẸN GIỜ =================
@@ -466,11 +531,10 @@ bot.hears('⏰ Hẹn giờ', async ctx => {
 bot.action(/^rem_pick:(\d+)$/, async ctx => {
   try{
     const id = parseInt(ctx.match[1])
-    const res = await db.query('SELECT * FROM customers WHERE id=$1', [id])
-    if(!res.rows.length){ await ctx.answerCbQuery('Không tìm thấy!'); return }
-    const u = res.rows[0]
+    const u = await getCustomer(id)
+    if(!u){ await ctx.answerCbQuery('Không tìm thấy!'); return }
     await ctx.answerCbQuery()
-    state[ctx.from.id] = { step: 'rem_datetime', customerId: id, customerName: u.name, customerService: u.service, customerGmail: u.gmail }
+    setState(ctx.from.id, { step: 'rem_datetime', customerId: id, customerName: u.name, customerService: u.service, customerGmail: u.gmail })
     await ctx.editMessageText(
 `⏰ HẸN GIỜ LIÊN HỆ
 
@@ -501,10 +565,7 @@ bot.hears('📋 Xem hẹn giờ', async ctx => {
     }).join('\n\n')
 
     ctx.reply(
-      `📋 LỊCH HẸN ĐANG CHỜ (${res.rows.length})
-━━━━━━━━━━━━━━
-
-${lines}`,
+      `📋 LỊCH HẸN ĐANG CHỜ (${res.rows.length})\n━━━━━━━━━━━━━━\n\n${lines}`,
       Markup.inlineKeyboard(
         res.rows.map(r => [Markup.button.callback(
           `🗑 ${r.name} — ${formatDT(r.remind_at)}`, `rem_del:${r.id}`
@@ -523,13 +584,16 @@ bot.action(/^rem_del:(\d+)$/, async ctx => {
   }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
 })
 
+
+// ================= TEXT HANDLER =================
+
 bot.on('text', async ctx => {
   try{
     const text = ctx.message.text.trim()
     const s = state[ctx.from.id]
 
     if(text === '⬅️ Hủy'){
-      delete state[ctx.from.id]
+      clearState(ctx.from.id)
       return mainMenu(ctx)
     }
 
@@ -544,35 +608,33 @@ bot.on('text', async ctx => {
       for(const line of text.split('\n')){
         const m = line.match(/^(.+?):\s*(.+)$/)
         if(!m) continue
-        const key = m[1].trim()
-        const val = m[2].trim()
-        if(key === 'Tên') parsed.name = val
-        else if(key === 'Gmail') parsed.gmail = val
-        else if(key === 'Ngày bắt đầu') parsed.start_date = parseDateVN(val)
+        const key = m[1].trim(), val = m[2].trim()
+        if(key === 'Tên')               parsed.name         = val
+        else if(key === 'Gmail')        parsed.gmail        = val
+        else if(key === 'Ngày bắt đầu') parsed.start_date  = parseDateVN(val)
         else if(key === 'Ngày hết hạn') parsed.expiry_date = parseDateVN(val)
       }
 
-      if('start_date' in parsed && !parsed.start_date)
+      if('start_date'  in parsed && !parsed.start_date)
         return ctx.reply('❌ Ngày bắt đầu không hợp lệ!\nĐịnh dạng: dd/mm/yyyy (vd: 01/02/2026)')
       if('expiry_date' in parsed && !parsed.expiry_date)
         return ctx.reply('❌ Ngày hết hạn không hợp lệ!\nĐịnh dạng: dd/mm/yyyy (vd: 01/03/2026)')
 
-      const cur = await db.query('SELECT * FROM customers WHERE id=$1', [id])
-      if(!cur.rows.length){
-        delete state[ctx.from.id]
+      const u = await getCustomer(id)
+      if(!u){
+        clearState(ctx.from.id)
         ctx.reply('❌ Không tìm thấy khách!')
         return mainMenu(ctx)
       }
-      const u = cur.rows[0]
 
       const updates = []; const values = []; let i = 1
-      if(parsed.name      && parsed.name !== u.name)                               { updates.push(`name=$${i++}`);        values.push(parsed.name) }
-      if(parsed.gmail     && parsed.gmail !== u.gmail)                             { updates.push(`gmail=$${i++}`);       values.push(parsed.gmail) }
-      if(parsed.start_date && format(parsed.start_date) !== format(u.start_date)) { updates.push(`start_date=$${i++}`);  values.push(parsed.start_date) }
-      if(parsed.expiry_date && format(parsed.expiry_date) !== format(u.expiry_date)){ updates.push(`expiry_date=$${i++}`); values.push(parsed.expiry_date) }
+      if(parsed.name        && parsed.name        !== u.name)                               { updates.push(`name=$${i++}`);        values.push(parsed.name) }
+      if(parsed.gmail       && parsed.gmail       !== u.gmail)                              { updates.push(`gmail=$${i++}`);       values.push(parsed.gmail) }
+      if(parsed.start_date  && format(parsed.start_date)  !== format(u.start_date))        { updates.push(`start_date=$${i++}`);  values.push(parsed.start_date) }
+      if(parsed.expiry_date && format(parsed.expiry_date) !== format(u.expiry_date))       { updates.push(`expiry_date=$${i++}`); values.push(parsed.expiry_date) }
 
       if(!updates.length){
-        delete state[ctx.from.id]
+        clearState(ctx.from.id)
         ctx.reply('ℹ️ Không có thay đổi nào.')
         return mainMenu(ctx)
       }
@@ -581,12 +643,12 @@ bot.on('text', async ctx => {
       await db.query(`UPDATE customers SET ${updates.join(', ')} WHERE id=$${i}`, values)
 
       const lines = []
-      if(parsed.name       && parsed.name !== u.name)                                lines.push(`👤 Tên: ${u.name} → ${parsed.name}`)
-      if(parsed.gmail      && parsed.gmail !== u.gmail)                              lines.push(`📧 Gmail: ${u.gmail} → ${parsed.gmail}`)
-      if(parsed.start_date && format(parsed.start_date) !== format(u.start_date))   lines.push(`📅 Ngày bắt đầu: ${format(u.start_date)} → ${format(parsed.start_date)}`)
-      if(parsed.expiry_date && format(parsed.expiry_date) !== format(u.expiry_date)) lines.push(`📅 Ngày hết hạn: ${format(u.expiry_date)} → ${format(parsed.expiry_date)}`)
+      if(parsed.name        && parsed.name        !== u.name)                               lines.push(`👤 Tên: ${u.name} → ${parsed.name}`)
+      if(parsed.gmail       && parsed.gmail       !== u.gmail)                              lines.push(`📧 Gmail: ${u.gmail} → ${parsed.gmail}`)
+      if(parsed.start_date  && format(parsed.start_date)  !== format(u.start_date))        lines.push(`📅 Ngày bắt đầu: ${format(u.start_date)} → ${format(parsed.start_date)}`)
+      if(parsed.expiry_date && format(parsed.expiry_date) !== format(u.expiry_date))       lines.push(`📅 Ngày hết hạn: ${format(u.expiry_date)} → ${format(parsed.expiry_date)}`)
 
-      delete state[ctx.from.id]
+      clearState(ctx.from.id)
       ctx.reply(`✅ Đã cập nhật\n\n${lines.join('\n')}`)
       return mainMenu(ctx)
     }
@@ -611,7 +673,7 @@ bot.on('text', async ctx => {
         'INSERT INTO reminders(customer_id, remind_at, note) VALUES($1,$2,$3)',
         [s.customerId, s.remindAt, note]
       )
-      delete state[ctx.from.id]
+      clearState(ctx.from.id)
       ctx.reply(
 `✅ Đã đặt lịch hẹn!
 
@@ -661,14 +723,14 @@ abc@gmail.com
       if(!isValidMonths(monthsRaw)) return ctx.reply('❌ Dòng 4 (Số tháng) không hợp lệ! Nhập số nguyên 1-120. Nhập lại:')
 
       const months = parseInt(monthsRaw)
-      const expiry = new Date(start.getTime() + months * 30 * 86400000)
+      const expiry = addMonths(start, months)
 
       await db.query(
         'INSERT INTO customers(service,name,gmail,start_date,expiry_date) VALUES($1,$2,$3,$4,$5)',
         [s.service, name, gmail, start, expiry]
       )
 
-      delete state[ctx.from.id]
+      clearState(ctx.from.id)
       ctx.reply(
 `✅ Đã thêm khách!
 
@@ -681,23 +743,25 @@ abc@gmail.com
 
   }catch(err){
     console.error('TEXT HANDLER ERROR:', err)
-    delete state[ctx.from.id]
+    clearState(ctx.from.id)
     ctx.reply('❌ Lỗi: ' + err.message + '\n\nVui lòng thử lại.')
     return mainMenu(ctx)
   }
 })
 
 
-
-// ================= REMINDER =================
+// ================= CRON: NHẮC NHỞ HÀNG NGÀY =================
 
 cron.schedule('0 9 * * *', async () => {
   try{
-    const res = await db.query('SELECT * FROM customers')
     const WARN_DAYS = [7, 3, 2, 1]
 
-    // ── 1. Khách sắp hết hạn (7, 3, 2, 1 ngày)
-    const soonList = res.rows.filter(u => WARN_DAYS.includes(daysFromNow(u.expiry_date)))
+    // ✅ Query SQL filter thay vì kéo cả bảng về JS
+    const soonRes = await db.query(
+      `SELECT * FROM customers
+       WHERE expiry_date > NOW() AND expiry_date <= NOW() + '7 days'::INTERVAL`
+    )
+    const soonList = soonRes.rows.filter(u => WARN_DAYS.includes(daysFromNow(u.expiry_date)))
 
     if(soonList.length){
       const lines = soonList.map(u => {
@@ -709,26 +773,24 @@ cron.schedule('0 9 * * *', async () => {
       )
     }
 
-    // ── 2. Khách đã hết hạn
-    const expiredList = res.rows.filter(u => daysFromNow(u.expiry_date) <= 0)
-
-    if(expiredList.length){
-      const lines = expiredList.map(u => {
+    const expRes = await db.query(
+      `SELECT * FROM customers WHERE expiry_date < NOW() ORDER BY expiry_date`
+    )
+    if(expRes.rows.length){
+      const lines = expRes.rows.map(u => {
         const over = -daysFromNow(u.expiry_date)
         return `🔴 ${u.name} · ${u.service}\n📧 ${u.gmail}\n📅 HSD: ${format(u.expiry_date)} · quá ${over} ngày`
       }).join('\n\n')
       await bot.telegram.sendMessage(ADMIN_ID,
-        `🔴 ĐÃ HẾT HẠN (${expiredList.length})\n━━━━━━━━━━━━━━\n\n${lines}`
+        `🔴 ĐÃ HẾT HẠN (${expRes.rows.length})\n━━━━━━━━━━━━━━\n\n${lines}`
       )
     }
 
-  }catch(err){
-    console.error('CRON ERROR:', err)
-  }
+  }catch(err){ console.error('CRON ERROR:', err) }
 }, { timezone: 'Asia/Ho_Chi_Minh' })
 
 
-// ── Cron hẹn giờ: chạy mỗi phút ──────────────────
+// ================= CRON: LỊCH HẸN =================
 
 cron.schedule('* * * * *', async () => {
   try{
@@ -762,8 +824,9 @@ http.createServer((req, res) => {
 
 bot.launch({ dropPendingUpdates: true })
 
-setInterval(() => {}, 1000)
+// ✅ Graceful shutdown
+process.once('SIGINT',  () => bot.stop('SIGINT'))
+process.once('SIGTERM', () => bot.stop('SIGTERM'))
 
 console.log('Bot running OK')
-
 
