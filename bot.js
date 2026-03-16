@@ -122,12 +122,12 @@ async function getCustomer(id){
 
 // ================= CONSTANTS =================
 
-const SERVICE_LIST = ['ChatGPT Plus', 'ChatGPT GO', 'YouTube', 'CapCut']
+const SERVICE_LIST = ['ChatGPT Plus', 'ChatGPT GO', 'YouTube', 'Gemini']
 const STATE_TIMEOUT_MS = 10 * 60 * 1000  // 10 phút
 
 const serviceKeyboard = Markup.keyboard([
   ['ChatGPT Plus', 'ChatGPT GO'],
-  ['YouTube', 'CapCut'],
+  ['YouTube', 'Gemini'],
   ['⬅️ Hủy']
 ]).resize()
 
