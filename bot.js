@@ -95,7 +95,8 @@ async function getCustomer(id){
 // ================= CONSTANTS & STATE =================
 const SERVICE_LIST = ['ChatGPT Plus', 'YouTube', 'Gemini']
 const STATE_TIMEOUT_MS = 15 * 60 * 1000 // 15 phút
-const PAGE_SIZE = 7 // Số lượng khách hiển thị mỗi trang
+const PAGE_SIZE = 7 // Quản lý khách hiển thị 7
+const STATS_PAGE_SIZE = 5 // Thống kê hiển thị 5 vì form dài
 
 let state = {}
 function setState(userId, data){
@@ -201,7 +202,6 @@ bot.action(/^mgr_page:(\d+)$/, async ctx => {
   await renderCustomerList(ctx, st.search, parseInt(ctx.match[1]), true)
 })
 
-// XEM CHI TIẾT KHÁCH TỪ QUẢN LÝ (ĐÃ KHÔI PHỤC GIAO DIỆN RÕ RÀNG NHƯ CŨ)
 bot.action(/^mgr_view:(\d+)$/, async ctx => {
   const id = parseInt(ctx.match[1])
   const u = await getCustomer(id)
@@ -263,17 +263,17 @@ bot.action(/^ed_([ngse]):(\d+)$/, async ctx => {
 })
 
 
-// ================= 3. THỐNG KÊ (NÚT XOAY VÒNG) =================
+// ================= 3. THỐNG KÊ (CÓ PHÂN TRANG) =================
 const FILTERS = ['A', 'C', 'Y', 'G'] // All, Chatgpt, Youtube, Gemini
 const FILTER_NAMES = { 'A': 'Tất cả', 'C': 'GPT Plus', 'Y': 'YouTube', 'G': 'Gemini' }
 const SORTS = ['ea', 'ed', 'sd', 'sa'] // Expiry Asc, Expiry Desc, Start Desc, Start Asc
 const SORT_NAMES = { 'ea': 'Sắp hết hạn', 'ed': 'Hạn dài nhất', 'sd': 'Mới nhất', 'sa': 'Cũ nhất' }
 
 bot.hears('📊 Thống kê', async ctx => {
-  await renderStats(ctx, 'A', 'ea', false)
+  await renderStats(ctx, 'A', 'ea', 0, false)
 })
 
-async function renderStats(ctx, filter, sort, isEdit){
+async function renderStats(ctx, filter, sort, page, isEdit){
   let where = '', params = [], order = ''
   if(filter === 'C') { where = 'WHERE service=$1'; params.push('ChatGPT Plus') }
   else if(filter === 'Y') { where = 'WHERE service=$1'; params.push('YouTube') }
@@ -287,28 +287,53 @@ async function renderStats(ctx, filter, sort, isEdit){
   const res = await db.query(`SELECT * FROM customers ${where} ${order}`, params)
   const rows = res.rows
 
-  let msg = `📊 THỐNG KÊ\n━━━━━━━━━━━━━━\n`
-  msg += `Tổng: ${rows.length} khách\n━━━━━━━━━━━━━━`
+  // Tính toán số liệu tổng quan
+  const total = rows.length
+  const soon = rows.filter(u => { const d = daysFromNow(u.expiry_date); return d > 0 && d <= 7 }).length
+  const expired = rows.filter(u => daysFromNow(u.expiry_date) <= 0).length
+
+  // Xử lý phân trang
+  const totalPages = Math.ceil(total / STATS_PAGE_SIZE) || 1
+  if(page >= totalPages) page = totalPages - 1
+  if(page < 0) page = 0
+
+  const start = page * STATS_PAGE_SIZE
+  const currentRows = rows.slice(start, start + STATS_PAGE_SIZE)
+
+  let msg = `📊 THỐNG KÊ (${FILTER_NAMES[filter]} - ${SORT_NAMES[sort]})\n━━━━━━━━━━━━━━\n`
+  msg += `Tổng: ${total} · 🟠 Sắp HH: ${soon} · 🔴 Đã HH: ${expired}\n━━━━━━━━━━━━━━\n`
   
-  if(!rows.length) msg += '\n\n✅ Không có dữ liệu.'
-  else {
-    rows.slice(0, 15).forEach(u => {
+  if(!currentRows.length) {
+    msg += '\n✅ Không có dữ liệu.'
+  } else {
+    currentRows.forEach(u => {
       const diff = daysFromNow(u.expiry_date)
-      const icon = diff <= 0 ? '🔴' : diff <= 3 ? '🟠' : '🟢'
-      msg += `\n${icon} ${u.name} (${u.service})\n📅 HSD: ${format(u.expiry_date)} (${diff <= 0 ? 'quá' : 'còn'} ${Math.abs(diff)} ngày)`
+      const icon = diff <= 0 ? '🔴' : diff <= 3 ? '🟠' : (diff <= 7 ? '🟡' : '🟢')
+      const status = diff <= 0 ? `quá ${Math.abs(diff)}` : `còn ${diff}`
+      
+      msg += `\n${icon} ${u.name} (${u.service})\n📧 ${u.gmail}\n📅 Bắt đầu: ${format(u.start_date)}\n📅 Hết hạn: ${format(u.expiry_date)} (${status} ngày)\n━━━━━━━━━━━━━━\n`
     })
-    if(rows.length > 15) msg += `\n\n... và ${rows.length - 15} khách khác (Xem Export Excel).`
   }
 
+  // Nút Lọc và Sắp xếp
   const nextFilter = FILTERS[(FILTERS.indexOf(filter) + 1) % FILTERS.length]
   const nextSort = SORTS[(SORTS.indexOf(sort) + 1) % SORTS.length]
 
-  const kb = Markup.inlineKeyboard([
-    [
-      Markup.button.callback(`📁 Lọc: ${FILTER_NAMES[filter]} 🔄`, `st:${nextFilter}:${sort}`),
-      Markup.button.callback(`🔃 Xếp: ${SORT_NAMES[sort]} 🔄`, `st:${filter}:${nextSort}`)
-    ]
-  ])
+  const actionKb = [
+    Markup.button.callback(`📁 Lọc: ${FILTER_NAMES[filter]} 🔄`, `st:${nextFilter}:${sort}:0`), // Reset về trang 0 khi lọc
+    Markup.button.callback(`🔃 Xếp: ${SORT_NAMES[sort]} 🔄`, `st:${filter}:${nextSort}:0`) // Reset về trang 0 khi đổi xếp
+  ]
+
+  // Nút phân trang
+  const pageKb = []
+  if(page > 0) pageKb.push(Markup.button.callback('⬅️ Trang trước', `st:${filter}:${sort}:${page - 1}`))
+  pageKb.push(Markup.button.callback(`${page + 1}/${totalPages}`, 'noop'))
+  if(page < totalPages - 1) pageKb.push(Markup.button.callback('Trang sau ➡️', `st:${filter}:${sort}:${page + 1}`))
+
+  const kbArray = [actionKb]
+  if(pageKb.length > 1) kbArray.push(pageKb)
+
+  const kb = Markup.inlineKeyboard(kbArray)
 
   if(isEdit) {
     try { await ctx.editMessageText(msg, kb) } catch(e){}
@@ -317,9 +342,12 @@ async function renderStats(ctx, filter, sort, isEdit){
   }
 }
 
-bot.action(/^st:([ACYG]):(ea|ed|sd|sa)$/, async ctx => {
+bot.action(/^st:([ACYG]):(ea|ed|sd|sa):(\d+)$/, async ctx => {
   await ctx.answerCbQuery()
-  await renderStats(ctx, ctx.match[1], ctx.match[2], true)
+  const filter = ctx.match[1]
+  const sort = ctx.match[2]
+  const page = parseInt(ctx.match[3])
+  await renderStats(ctx, filter, sort, page, true)
 })
 
 
@@ -369,13 +397,10 @@ bot.action(/^warn:(\d+)$/, async ctx => {
 
 
 // ================= 5. LỊCH HẸN & DỮ LIỆU =================
-
-// XEM DANH SÁCH LỊCH HẸN (ĐÃ KHÔI PHỤC HIỂN THỊ RÕ RÀNG NHƯ CŨ)
 bot.hears('⏰ Lịch hẹn', async ctx => {
   const res = await db.query(`SELECT r.id, r.remind_at, r.note, c.name, c.service, c.gmail FROM reminders r JOIN customers c ON r.customer_id = c.id WHERE r.done = FALSE ORDER BY r.remind_at`)
   if(!res.rows.length) return ctx.reply('✅ Không có lịch hẹn nào đang chờ.')
   
-  // Hiển thị nội dung chi tiết dạng Text
   const lines = res.rows.map(r => {
     let s = `⏰ ${formatDT(r.remind_at)}\n👤 ${r.name} (${r.service})\n📧 ${r.gmail}`
     if(r.note) s += `\n📝 ${r.note}`
@@ -384,7 +409,6 @@ bot.hears('⏰ Lịch hẹn', async ctx => {
 
   const msg = `📋 LỊCH HẸN ĐANG CHỜ (${res.rows.length})\n━━━━━━━━━━━━━━\n\n${lines}`
 
-  // Các nút điều khiển ở dưới
   const kb = res.rows.map(r => [Markup.button.callback(`🗑 Đã xong: ${r.name} (${formatDT(r.remind_at)})`, `rem_del:${r.id}`)])
   
   ctx.reply(msg, Markup.inlineKeyboard(kb))
@@ -397,7 +421,6 @@ bot.action(/^rem_del:(\d+)$/, async ctx => {
   ctx.reply('✅ Đã đánh dấu hoàn thành/xóa lịch hẹn.')
 })
 
-// ĐẶT LỊCH HẸN TỪ QUẢN LÝ (ĐÃ KHÔI PHỤC HIỂN THỊ RÕ RÀNG NHƯ CŨ)
 bot.action(/^rem_set:(\d+)$/, async ctx => {
   await ctx.answerCbQuery()
   const id = parseInt(ctx.match[1])
@@ -493,13 +516,12 @@ bot.on('text', async ctx => {
     clearState(ctx.from.id)
     ctx.reply('✅ Đã cập nhật thành công!')
     
-    // Tự động load lại bảng thông tin chi tiết
     ctx.match = [null, s.id.toString()]
     bot.handleUpdate({ callback_query: { id: '0', from: ctx.from, message: ctx.message, data: `mgr_view:${s.id}` } })
     return
   }
 
-  // ĐẶT LỊCH HẸN - PHẦN GHI CHÚ
+  // ĐẶT LỊCH HẸN
   if(s.step === 'rem_datetime'){
     const dt = parseDateTimeFull(text)
     if(!dt) return ctx.reply('❌ Ngày giờ không hợp lệ. Ví dụ: 15/03/2026 09:00:')
@@ -507,7 +529,6 @@ bot.on('text', async ctx => {
     return ctx.reply('📝 Nhập ghi chú (hoặc gõ - để bỏ qua):')
   }
   
-  // ĐẶT LỊCH HẸN - HIỂN THỊ KẾT QUẢ ĐÃ LƯU RÕ RÀNG
   if(s.step === 'rem_note'){
     const note = text === '-' ? null : text
     await db.query('INSERT INTO reminders(customer_id, remind_at, note) VALUES($1,$2,$3)', [s.id, s.remindAt, note])
@@ -556,4 +577,3 @@ bot.launch({ dropPendingUpdates: true })
 process.once('SIGINT', () => bot.stop('SIGINT'))
 process.once('SIGTERM', () => bot.stop('SIGTERM'))
 console.log('🚀 Bot V2 Running OK')
-
