@@ -122,11 +122,11 @@ async function getCustomer(id){
 
 // ================= CONSTANTS =================
 
-const SERVICE_LIST = ['ChatGPT Plus', 'ChatGPT GO', 'YouTube', 'Gemini']
+const SERVICE_LIST = ['ChatGPT Plus', 'YouTube', 'Gemini']
 const STATE_TIMEOUT_MS = 10 * 60 * 1000  // 10 phút
 
 const serviceKeyboard = Markup.keyboard([
-  ['ChatGPT Plus', 'ChatGPT GO'],
+  ['ChatGPT Plus'],
   ['YouTube', 'Gemini'],
   ['⬅️ Hủy']
 ]).resize()
@@ -280,38 +280,86 @@ bot.action('edit_abort', async ctx => {
 })
 
 
-// ================= STATS =================
+// ================= STATS (NEW: ALL IN ONE & SORTABLE) =================
 
-bot.hears('📊 Thống kê', ctx => {
-  ctx.reply(
-    'Chọn dịch vụ:',
-    Markup.inlineKeyboard(
-      SERVICE_LIST.map(s => [Markup.button.callback(s, `stats:${s}`)])
-    )
-  )
-})
+const STAT_FILTERS = { 'A': 'Tất cả', 'C': 'ChatGPT Plus', 'Y': 'YouTube', 'G': 'Gemini' }
+const STAT_SORTS = { 'dn': 'Mới nhất', 'do': 'Cũ nhất', 'dh': 'Ngày còn nhiều', 'dl': 'Ngày còn ít' }
 
-bot.action(/^stats:(.+)$/, async ctx => {
-  try{
-    const service = ctx.match[1]
-    const res = await db.query(
-      'SELECT * FROM customers WHERE service=$1 ORDER BY expiry_date', [service]
-    )
-    await ctx.answerCbQuery()
-    if(!res.rows.length) return ctx.editMessageText(`Không có khách nào dùng ${service}`)
+async function sendStats(ctx, filter = 'A', sort = 'dl', isEdit = false){
+  // 1. Build Query
+  let where = ''
+  let params = []
+  if(filter !== 'A'){
+    where = 'WHERE service = $1'
+    const svcName = filter === 'C' ? 'ChatGPT Plus' : (filter === 'Y' ? 'YouTube' : 'Gemini')
+    params.push(svcName)
+  }
 
-    const total   = res.rows.length
-    const soon    = res.rows.filter(u => { const d = daysFromNow(u.expiry_date); return d > 0 && d <= 7 }).length
-    const expired = res.rows.filter(u => daysFromNow(u.expiry_date) <= 0).length
+  let order = ''
+  if(sort === 'dn') order = 'ORDER BY start_date DESC'
+  else if(sort === 'do') order = 'ORDER BY start_date ASC'
+  else if(sort === 'dh') order = 'ORDER BY expiry_date DESC'
+  else if(sort === 'dl') order = 'ORDER BY expiry_date ASC'
 
-    let msg = `📋 ${service}\n━━━━━━━━━━━━━━\nTổng: ${total} · 🟠 Sắp HH: ${soon} · 🔴 Đã HH: ${expired}\n━━━━━━━━━━━━━━`
-    res.rows.forEach(u => {
+  const res = await db.query(`SELECT * FROM customers ${where} ${order}`, params)
+  const rows = res.rows
+
+  // 2. Build Text
+  const total   = rows.length
+  const soon    = rows.filter(u => { const d = daysFromNow(u.expiry_date); return d > 0 && d <= 7 }).length
+  const expired = rows.filter(u => daysFromNow(u.expiry_date) <= 0).length
+
+  let msg = `📊 THỐNG KÊ (${STAT_FILTERS[filter]} - ${STAT_SORTS[sort]})\n━━━━━━━━━━━━━━\nTổng: ${total} · 🟠 Sắp HH: ${soon} · 🔴 Đã HH: ${expired}\n━━━━━━━━━━━━━━`
+  
+  if(!rows.length) {
+    msg += '\n\n✅ Không có dữ liệu.'
+  } else {
+    rows.forEach(u => {
       const diff = daysFromNow(u.expiry_date)
       const icon   = diff <= 0 ? '🔴' : diff <= 3 ? '🟠' : diff <= 7 ? '🟡' : '🟢'
       const status = diff <= 0 ? `quá ${-diff} ngày` : `còn ${diff} ngày`
-      msg += `\n\n${icon} ${u.name}\n📧 ${u.gmail}\n📅 ${format(u.start_date)} → ${format(u.expiry_date)} (${status})\n━━━━━━━━━━━━━━`
+      msg += `\n\n${icon} ${u.name} (${u.service})\n📧 ${u.gmail}\n📅 Bắt đầu: ${format(u.start_date)}\n📅 Hết hạn: ${format(u.expiry_date)} (${status})\n━━━━━━━━━━━━━━`
     })
-    await ctx.editMessageText(msg)
+  }
+
+  // 3. Build Keyboard
+  const kb = Markup.inlineKeyboard([
+    [
+      Markup.button.callback(filter === 'A' ? '✅ Tất cả' : 'Tất cả', `st:A:${sort}`),
+      Markup.button.callback(filter === 'C' ? '✅ GPT Plus' : 'GPT Plus', `st:C:${sort}`)
+    ],
+    [
+      Markup.button.callback(filter === 'Y' ? '✅ YouTube' : 'YouTube', `st:Y:${sort}`),
+      Markup.button.callback(filter === 'G' ? '✅ Gemini' : 'Gemini', `st:G:${sort}`)
+    ],
+    [
+      Markup.button.callback(sort === 'dn' ? '✅ Mới nhất' : 'Mới nhất', `st:${filter}:dn`),
+      Markup.button.callback(sort === 'do' ? '✅ Cũ nhất' : 'Cũ nhất', `st:${filter}:do`)
+    ],
+    [
+      Markup.button.callback(sort === 'dh' ? '✅ Ngày còn nhiều' : 'Ngày còn lớn', `st:${filter}:dh`),
+      Markup.button.callback(sort === 'dl' ? '✅ Ngày còn ít' : 'Ngày còn nhỏ', `st:${filter}:dl`)
+    ]
+  ])
+
+  if(isEdit) {
+    await ctx.editMessageText(msg, kb)
+  } else {
+    await ctx.reply(msg, kb)
+  }
+}
+
+bot.hears('📊 Thống kê', async ctx => {
+  try{ await sendStats(ctx, 'A', 'dl') } // Default: All services, days left ascending
+  catch(err){ console.error(err); ctx.reply('❌ Lỗi: ' + err.message) }
+})
+
+bot.action(/^st:([ACYG]):(dn|do|dh|dl)$/, async ctx => {
+  try{
+    await ctx.answerCbQuery()
+    const filter = ctx.match[1]
+    const sort = ctx.match[2]
+    await sendStats(ctx, filter, sort, true)
   }catch(err){ console.error(err); ctx.answerCbQuery('❌ Lỗi') }
 })
 
@@ -782,7 +830,7 @@ cron.schedule('0 9 * * *', async () => {
         return `🔴 ${u.name} · ${u.service}\n📧 ${u.gmail}\n📅 HSD: ${format(u.expiry_date)} · quá ${over} ngày`
       }).join('\n\n')
       await bot.telegram.sendMessage(ADMIN_ID,
-        `🔴 ĐÃ HẾT HẠN (${expRes.rows.length})\n━━━━━━━━━━━━━━\n\n${lines}`
+        `🔴 ĐĐA HẾT HẠN (${expRes.rows.length})\n━━━━━━━━━━━━━━\n\n${lines}`
       )
     }
 
@@ -829,4 +877,3 @@ process.once('SIGINT',  () => bot.stop('SIGINT'))
 process.once('SIGTERM', () => bot.stop('SIGTERM'))
 
 console.log('Bot running OK')
-
