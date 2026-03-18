@@ -500,6 +500,7 @@ bot.action(/^rem_set:(\d+)$/, async ctx => {
 bot.hears('⚙️ Dữ liệu', ctx => {
   ctx.reply('⚙️ TÙY CHỌN DỮ LIỆU', Markup.inlineKeyboard([
     [Markup.button.callback('📥 Xuất File Excel', 'data_export')],
+    [Markup.button.callback('✏️ Sửa Gmail hàng loạt', 'bulk_gmail')],
     [Markup.button.callback('🔴 Xóa Trắng Database', 'data_reset')]
   ]))
 })
@@ -528,6 +529,79 @@ bot.action('data_export', async ctx => {
   fs.unlinkSync(file)
 })
 
+// ── 11b. SỬA GMAIL HÀNG LOẠT ─────────────────────────────
+bot.action('bulk_gmail', async ctx => {
+  await ctx.answerCbQuery()
+  await ctx.editMessageText(
+    '✏️ SỬA GMAIL HÀNG LOẠT\n\nChọn dịch vụ cần sửa:',
+    Markup.inlineKeyboard([
+      [Markup.button.callback('📋 Tất cả dịch vụ', 'bgmail_f:all')],
+      [Markup.button.callback('ChatGPT Plus', 'bgmail_f:ChatGPT Plus')],
+      [Markup.button.callback('YouTube', 'bgmail_f:YouTube'), Markup.button.callback('Gemini', 'bgmail_f:Gemini')]
+    ])
+  )
+})
+
+bot.action(/^bgmail_f:(.+)$/, async ctx => {
+  await ctx.answerCbQuery()
+  const filter = ctx.match[1]
+
+  let query = 'SELECT id, name, gmail FROM customers'
+  let params = []
+  if (filter !== 'all') { query += ' WHERE service=$1'; params.push(filter) }
+  query += ' ORDER BY id'
+
+  const res = await db.query(query, params)
+  const rows = res.rows
+
+  if (!rows.length) {
+    return ctx.editMessageText('❌ Không có khách nào.', Markup.inlineKeyboard([
+      [Markup.button.callback('🔙 Quay lại', 'bulk_gmail')]
+    ]))
+  }
+
+  const filterLabel = filter === 'all' ? 'Tất cả' : filter
+  setState(ctx.from.id, { step: 'bulk_gmail', filter, filterLabel })
+
+  const listText = rows.map(u => `${u.id}|${u.name}|${u.gmail}`).join('\n')
+  const msg = `✏️ SỬA GMAIL HÀNG LOẠT\n📦 ${filterLabel} · ${rows.length} khách\n━━━━━━━━━━━━━━\n\n`
+    + `Danh sách hiện tại:\n\`\`\`\n${listText}\n\`\`\`\n\n`
+    + `📌 Gửi lại các dòng cần đổi:\n\`ID|gmail_mới\`\n\nVí dụ:\n\`\`\`\n3|newemail@gmail.com\n7|other@gmail.com\n\`\`\`\n_(Chỉ gửi các dòng cần thay đổi)_`
+
+  await ctx.reply(msg, { parse_mode: 'Markdown', ...cancelKeyboard })
+})
+
+bot.action('bgmail_ok', async ctx => {
+  await ctx.answerCbQuery('Đang cập nhật...')
+  const st = state[ctx.from.id]
+  if (!st || st.step !== 'bulk_gmail_confirm') return
+
+  const toUpdate = st.toUpdate
+  let success = 0, fail = 0
+
+  for (const u of toUpdate) {
+    try {
+      await db.query('UPDATE customers SET gmail=$1 WHERE id=$2', [u.newGmail, u.id])
+      success++
+    } catch (e) { fail++ }
+  }
+
+  clearState(ctx.from.id)
+
+  let resultMsg = `✅ Hoàn tất! Đã cập nhật ${success}/${toUpdate.length} gmail.`
+  if (fail) resultMsg += `\n❌ ${fail} dòng bị lỗi khi cập nhật.`
+
+  await ctx.editMessageText(resultMsg)
+  return mainMenu(ctx)
+})
+
+bot.action('bgmail_cancel', async ctx => {
+  await ctx.answerCbQuery()
+  clearState(ctx.from.id)
+  await ctx.editMessageText('🚫 Đã hủy sửa gmail hàng loạt.')
+  return mainMenu(ctx)
+})
+
 bot.action('data_reset', async ctx => {
   await ctx.editMessageText('⚠️ CHẮC CHẮN XÓA TOÀN BỘ?', Markup.inlineKeyboard([
     [Markup.button.callback('✅ Xác nhận Xóa', 'data_reset_ok'), Markup.button.callback('🔙 Hủy', 'noop')]
@@ -548,6 +622,60 @@ bot.on('text', async ctx => {
   const text = ctx.message.text.trim()
   const s = state[ctx.from.id]
   if (!s) return
+
+  if (s.step === 'bulk_gmail') {
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l)
+    const valid = []
+    const errors = []
+
+    for (const line of lines) {
+      const parts = line.split('|')
+      if (parts.length !== 2) { errors.push(`❌ Sai format: "${line}"`); continue }
+      const id = parseInt(parts[0])
+      const gmail = parts[1].trim()
+      if (isNaN(id) || id <= 0) { errors.push(`❌ ID không hợp lệ: "${parts[0]}"`); continue }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(gmail)) { errors.push(`❌ Gmail không hợp lệ: "${gmail}"`); continue }
+      valid.push({ id, gmail })
+    }
+
+    if (!valid.length) {
+      const errMsg = errors.length ? errors.join('\n') : '❌ Không có dòng hợp lệ nào.'
+      return ctx.reply(errMsg + '\n\nNhập lại theo format: ID|gmail_mới', cancelKeyboard)
+    }
+
+    const ids = valid.map(v => v.id)
+    const res = await db.query('SELECT id, name, gmail FROM customers WHERE id = ANY($1)', [ids])
+    const existMap = {}
+    res.rows.forEach(r => { existMap[r.id] = r })
+
+    const toUpdate = []
+    const notFound = []
+    for (const v of valid) {
+      if (existMap[v.id]) {
+        toUpdate.push({ id: v.id, name: existMap[v.id].name, oldGmail: existMap[v.id].gmail, newGmail: v.gmail })
+      } else {
+        notFound.push(v.id)
+      }
+    }
+
+    if (!toUpdate.length) {
+      return ctx.reply('❌ Không tìm thấy khách nào với các ID đã nhập.\n\nNhập lại:', cancelKeyboard)
+    }
+
+    setState(ctx.from.id, { step: 'bulk_gmail_confirm', toUpdate })
+
+    let msg = `🔎 XÁC NHẬN CẬP NHẬT ${toUpdate.length} GMAIL\n━━━━━━━━━━━━━━\n`
+    toUpdate.forEach(u => {
+      msg += `\n👤 ${u.name} (ID: ${u.id})\n   📧 ${u.oldGmail}\n   ➡️ ${u.newGmail}\n`
+    })
+    if (notFound.length) msg += `\n⚠️ Không tìm thấy ID: ${notFound.join(', ')}`
+    if (errors.length) msg += `\n\n${errors.join('\n')}`
+
+    return ctx.reply(msg, Markup.inlineKeyboard([
+      [Markup.button.callback(`✅ Xác nhận cập nhật ${toUpdate.length} gmail`, 'bgmail_ok')],
+      [Markup.button.callback('🔙 Hủy', 'bgmail_cancel')]
+    ]))
+  }
 
   if (s.step === 'manage') {
     return await renderCustomerList(ctx, text, 0, false)
