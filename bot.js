@@ -547,7 +547,7 @@ bot.on('text', async ctx => {
     s.step = 'add_form'
     return ctx.reply(
       `📋 Nhập thông tin (4 dòng):\n\nTên\nGmail\nNgày bắt đầu (ddmmyy)\nSố tháng\n\nVí dụ:\nNguyen Van A\nabc@gmail.com\n210226\n1`,
-      Markup.removeKeyboard()
+      cancelKeyboard
     )
   }
 
