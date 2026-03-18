@@ -123,7 +123,8 @@ function mainMenu(ctx) {
     Markup.keyboard([
       ['➕ Thêm khách', '🔍 Quản lý khách'],
       ['📊 Thống kê', '⚠️ Cảnh báo Hạn'],
-      ['⏰ Lịch hẹn', '⚙️ Dữ liệu']
+      ['⏰ Lịch hẹn', '⚙️ Dữ liệu'],
+      ['🔄 Khởi động lại']
     ]).resize()
   )
 }
@@ -135,6 +136,7 @@ bot.use((ctx, next) => {
 })
 
 bot.start(ctx => mainMenu(ctx))
+bot.hears('🔄 Khởi động lại', ctx => mainMenu(ctx))
 
 // ── 6. THÊM KHÁCH ────────────────────────────────────────
 bot.hears('➕ Thêm khách', ctx => {
@@ -177,7 +179,7 @@ async function renderCustomerList(ctx, search, page, isEdit = true) {
   const kb = currentRows.map(u => {
     const d = daysFromNow(u.expiry_date)
     const icon = d <= 0 ? '🔴' : d <= 3 ? '🟠' : '🟢'
-    return [Markup.button.callback(`${icon} ${u.name} (${u.service})`, `mgr_view:${u.id}`)]
+    return [Markup.button.callback(`${icon} ${u.name} (${u.service})`, `mgr_view:${u.id}:list`)]
   })
 
   // Ẩn phân trang nếu chỉ 1 trang
@@ -194,7 +196,6 @@ async function renderCustomerList(ctx, search, page, isEdit = true) {
   if (isEdit) {
     try { await ctx.editMessageText(msg, { parse_mode: 'Markdown', ...markup }) } catch (e) { }
   } else {
-    // FIX: không merge cancelKeyboard + inlineKeyboard cùng lúc nữa
     await ctx.reply(msg, { parse_mode: 'Markdown', ...markup })
   }
 }
@@ -206,8 +207,9 @@ bot.action(/^mgr_page:(\d+)$/, async ctx => {
   await renderCustomerList(ctx, st.search, parseInt(ctx.match[1]), true)
 })
 
-// Chi tiết khách - function độc lập, thay thế bot.handleUpdate hack
-async function showCustomerDetail(ctx, id) {
+// Chi tiết khách
+// backCb: 'mgr_back' | 'rem_back' | 'warn_back'
+async function showCustomerDetail(ctx, id, backCb) {
   const u = await getCustomer(id)
   if (!u) {
     await ctx.answerCbQuery('Khách không tồn tại!')
@@ -216,6 +218,10 @@ async function showCustomerDetail(ctx, id) {
 
   const d = daysFromNow(u.expiry_date)
   const status = d <= 0 ? `🔴 Quá ${-d} ngày` : d <= 3 ? `🟠 Còn ${d} ngày` : `🟢 Còn ${d} ngày`
+
+  const backLabel = backCb === 'rem_back' ? '🔙 Quay lại lịch hẹn'
+    : backCb === 'warn_back' ? '🔙 Quay lại cảnh báo'
+    : '🔙 Quay lại danh sách'
 
   const msg = `👤 THÔNG TIN KHÁCH HÀNG\n━━━━━━━━━━━━━━\n\n`
     + `👤 Tên: ${u.name}\n`
@@ -228,13 +234,17 @@ async function showCustomerDetail(ctx, id) {
   await ctx.editMessageText(msg, Markup.inlineKeyboard([
     [Markup.button.callback('✏️ Chỉnh sửa', `edit_block:${id}`), Markup.button.callback('🔄 Gia hạn', `renew:${id}`)],
     [Markup.button.callback('⏰ Hẹn giờ', `rem_set:${id}`), Markup.button.callback('🗑 Xóa khách', `mgr_del:${id}`)],
-    [Markup.button.callback('🔙 Quay lại danh sách', 'mgr_back')]
+    [Markup.button.callback(backLabel, backCb)]
   ]))
 }
 
-bot.action(/^mgr_view:(\d+)$/, async ctx => {
+// mgr_view:id:src — src: list | rem | warn (mặc định list)
+bot.action(/^mgr_view:(\d+)(?::(\w+))?$/, async ctx => {
   await ctx.answerCbQuery()
-  await showCustomerDetail(ctx, parseInt(ctx.match[1]))
+  const id = parseInt(ctx.match[1])
+  const src = ctx.match[2]
+  const backCb = src === 'rem' ? 'rem_back' : src === 'warn' ? 'warn_back' : 'mgr_back'
+  await showCustomerDetail(ctx, id, backCb)
 })
 
 bot.action('mgr_back', async ctx => {
@@ -243,11 +253,21 @@ bot.action('mgr_back', async ctx => {
   await renderCustomerList(ctx, st.search || '', st.page || 0, true)
 })
 
+bot.action('rem_back', async ctx => {
+  await ctx.answerCbQuery()
+  await renderReminders(ctx, true)
+})
+
+bot.action('warn_back', async ctx => {
+  await ctx.answerCbQuery()
+  await renderWarnings(ctx, 7, true)
+})
+
 bot.action(/^mgr_del:(\d+)$/, async ctx => {
   const id = parseInt(ctx.match[1])
   await ctx.editMessageText('⚠️ Bạn chắc chắn muốn xóa khách này?', Markup.inlineKeyboard([
     [Markup.button.callback('✅ Xác nhận Xóa', `del_ok:${id}`)],
-    [Markup.button.callback('🔙 Hủy', `mgr_view:${id}`)]
+    [Markup.button.callback('🔙 Hủy', `mgr_view:${id}:list`)]
   ]))
 })
 
@@ -337,18 +357,16 @@ async function renderStats(ctx, filter, sort, page, isEdit) {
     })
   }
 
-  // Tabs lọc - hiện tất cả, đánh dấu active
+  // Tabs lọc - đánh dấu active
   const filterKb = FILTERS.map(f =>
     Markup.button.callback(f === filter ? `✅ ${FILTER_NAMES[f]}` : FILTER_NAMES[f], `st:${f}:${sort}:0`)
   )
 
-  // Nút sort
   const nextSort = SORTS[(SORTS.indexOf(sort) + 1) % SORTS.length]
   const sortBtn = Markup.button.callback(`🔃 ${SORT_NAMES[sort]}`, `st:${filter}:${nextSort}:0`)
 
   const kbArray = [filterKb, [sortBtn]]
 
-  // Ẩn phân trang nếu chỉ 1 trang
   if (totalPages > 1) {
     const pageKb = []
     if (page > 0) pageKb.push(Markup.button.callback('⬅️', `st:${filter}:${sort}:${page - 1}`))
@@ -372,7 +390,6 @@ bot.action(/^st:([ACYG]):(ea|ed|sd|sa):(\d+)$/, async ctx => {
 })
 
 // ── 9. CẢNH BÁO HẠN ─────────────────────────────────────
-// Mặc định mở tab < 7 ngày
 bot.hears('⚠️ Cảnh báo Hạn', async ctx => {
   await renderWarnings(ctx, 7, false)
 })
@@ -396,15 +413,14 @@ async function renderWarnings(ctx, filterDays, isEdit) {
     })
   }
 
-  // Tabs lọc
   const tabsKb = [
     Markup.button.callback(filterDays === 0 ? '✅ Quá hạn' : '🔴 Quá hạn', 'warn:0'),
     Markup.button.callback(filterDays === 3 ? '✅ < 3 ngày' : '🟠 < 3 ngày', 'warn:3'),
     Markup.button.callback(filterDays === 7 ? '✅ < 7 ngày' : '🟡 < 7 ngày', 'warn:7')
   ]
 
-  // Nút bấm vào từng khách
-  const customerKb = rows.map(u => [Markup.button.callback(`👤 ${u.name} (${u.service})`, `mgr_view:${u.id}`)])
+  // Nút khách → quay lại cảnh báo khi bấm back
+  const customerKb = rows.map(u => [Markup.button.callback(`👤 ${u.name} (${u.service})`, `mgr_view:${u.id}:warn`)])
 
   const kb = Markup.inlineKeyboard([[...tabsKb], ...customerKb])
 
@@ -441,25 +457,22 @@ async function renderReminders(ctx, isEdit) {
         return s
       }).join('\n\n')
 
+  // Nút khách → quay lại lịch hẹn khi bấm back
   const kb = res.rows.length
     ? Markup.inlineKeyboard(res.rows.map(r => [
-        Markup.button.callback(`👤 ${r.name}`, `mgr_view:${r.cid}`),
+        Markup.button.callback(`👤 ${r.name}`, `mgr_view:${r.cid}:rem`),
         Markup.button.callback(`🗑 Xong`, `rem_del:${r.id}`)
       ]))
     : undefined
 
   if (isEdit) {
-    try {
-      await ctx.editMessageText(msg, kb)
-    } catch (e) {
-      await ctx.reply(msg, kb)
-    }
+    try { await ctx.editMessageText(msg, kb) } catch (e) { await ctx.reply(msg, kb) }
   } else {
     await ctx.reply(msg, kb)
   }
 }
 
-// FIX: reload list sau khi xóa thay vì chỉ edit markup
+// FIX: reload list sau khi xóa
 bot.action(/^rem_del:(\d+)$/, async ctx => {
   await db.query('DELETE FROM reminders WHERE id=$1', [parseInt(ctx.match[1])])
   await ctx.answerCbQuery('✅ Đã xóa lịch hẹn')
@@ -474,12 +487,13 @@ bot.action(/^rem_set:(\d+)$/, async ctx => {
 
   setState(ctx.from.id, { step: 'rem_datetime', id, customerName: u.name, customerService: u.service, customerGmail: u.gmail })
 
-  const msg = `⏰ HẸN GIỜ LIÊN HỆ\n\n`
+  ctx.reply(
+    `⏰ HẸN GIỜ LIÊN HỆ\n\n`
     + `👤 ${u.name} (${u.service})\n`
     + `📧 ${u.gmail}\n\n`
-    + `Nhập ngày giờ hẹn:\ndd/mm/yyyy HH:MM\nVí dụ: 15/03/2026 09:00\n\n(Bỏ giờ → mặc định 09:00)`
-
-  ctx.reply(msg, cancelKeyboard)
+    + `Nhập ngày giờ hẹn:\ndd/mm/yyyy HH:MM\nVí dụ: 15/03/2026 09:00\n\n(Bỏ giờ → mặc định 09:00)`,
+    cancelKeyboard
+  )
 })
 
 // ── 11. DỮ LIỆU ──────────────────────────────────────────
@@ -520,7 +534,7 @@ bot.action('data_reset', async ctx => {
   ]))
 })
 
-// FIX: answerCbQuery trước khi editMessageText
+// FIX: answerCbQuery trước editMessageText
 bot.action('data_reset_ok', async ctx => {
   await ctx.answerCbQuery('✅ Đã reset')
   await db.query('TRUNCATE TABLE customers, reminders RESTART IDENTITY CASCADE')
@@ -535,12 +549,10 @@ bot.on('text', async ctx => {
   const s = state[ctx.from.id]
   if (!s) return
 
-  // TÌM KIẾM
   if (s.step === 'manage') {
     return await renderCustomerList(ctx, text, 0, false)
   }
 
-  // THÊM KHÁCH - chọn dịch vụ
   if (s.step === 'add_service') {
     if (!SERVICE_LIST.includes(text)) return ctx.reply('❌ Chọn dịch vụ hợp lệ từ bàn phím:')
     s.service = text
@@ -551,7 +563,6 @@ bot.on('text', async ctx => {
     )
   }
 
-  // THÊM KHÁCH - nhập form
   if (s.step === 'add_form') {
     const lines = text.split('\n').map(l => l.trim()).filter(l => l)
     if (lines.length < 4) return ctx.reply('❌ Cần đủ 4 dòng. Nhập lại:')
@@ -568,7 +579,6 @@ bot.on('text', async ctx => {
     return mainMenu(ctx)
   }
 
-  // CHỈNH SỬA - parse block 5 dòng
   if (s.step === 'edit_block') {
     const lines = text.split('\n').map(l => l.trim()).filter(l => l)
     if (lines.length < 5) return ctx.reply('❌ Cần đủ 5 dòng. Nhập lại:')
@@ -589,16 +599,13 @@ bot.on('text', async ctx => {
       [name, gmail, service, startDate, expiryDate, id]
     )
     clearState(ctx.from.id)
-
-    // Gửi tin có nút để mở lại chi tiết (mgr_view sẽ edit tin này)
     await ctx.reply(
       '✅ Đã cập nhật thành công!',
-      Markup.inlineKeyboard([[Markup.button.callback('👤 Xem lại chi tiết', `mgr_view:${id}`)]])
+      Markup.inlineKeyboard([[Markup.button.callback('👤 Xem lại chi tiết', `mgr_view:${id}:list`)]])
     )
     return
   }
 
-  // GIA HẠN NHANH
   if (s.step === 'renew') {
     if (!isValidMonths(text)) return ctx.reply('❌ Số tháng không hợp lệ (1-120). Nhập lại:')
     const months = parseInt(text)
@@ -612,12 +619,11 @@ bot.on('text', async ctx => {
 
     await ctx.reply(
       `✅ Đã gia hạn thêm ${months} tháng!\n📅 Hết hạn mới: ${format(newExpiry)}`,
-      Markup.inlineKeyboard([[Markup.button.callback('👤 Xem lại chi tiết', `mgr_view:${id}`)]])
+      Markup.inlineKeyboard([[Markup.button.callback('👤 Xem lại chi tiết', `mgr_view:${id}:list`)]])
     )
     return
   }
 
-  // ĐẶT LỊCH HẸN - nhập ngày giờ
   if (s.step === 'rem_datetime') {
     const dt = parseDateTimeFull(text)
     if (!dt) return ctx.reply('❌ Ngày giờ không hợp lệ. Ví dụ: 15/03/2026 09:00:')
@@ -626,14 +632,12 @@ bot.on('text', async ctx => {
     return ctx.reply('📝 Nhập ghi chú (hoặc gõ - để bỏ qua):')
   }
 
-  // ĐẶT LỊCH HẸN - nhập ghi chú
   if (s.step === 'rem_note') {
     const note = text === '-' ? null : text
     await db.query(
       'INSERT INTO reminders(customer_id, remind_at, note) VALUES($1,$2,$3)',
       [s.id, s.remindAt, note]
     )
-
     const msg = `✅ Đã lưu lịch hẹn!\n\n`
       + `👤 ${s.customerName} (${s.customerService})\n`
       + `⏰ ${formatDT(s.remindAt)}\n`
@@ -646,7 +650,6 @@ bot.on('text', async ctx => {
 })
 
 // ── 13. CRON JOBS ─────────────────────────────────────────
-// Báo cáo 9h sáng: cảnh báo đúng ngày 5/3/1 trước HH + báo mỗi ngày nếu đã HH
 cron.schedule('0 9 * * *', async () => {
   try {
     const res = await db.query(`
@@ -661,7 +664,6 @@ cron.schedule('0 9 * * *', async () => {
 
     res.rows.forEach(u => {
       const d = daysFromNow(u.expiry_date)
-      // Cảnh báo đúng ngày 5, 3, 1 còn lại + mỗi ngày khi đã hết hạn (d <= 0)
       if ([5, 3, 1].includes(d) || d <= 0) {
         const label = d <= 0 ? `🔴 Quá ${Math.abs(d)} ngày` : `🟠 Còn ${d} ngày`
         msg += `\n${label} · ${u.name} (${u.service})\n   📧 ${u.gmail}`
@@ -673,8 +675,10 @@ cron.schedule('0 9 * * *', async () => {
   } catch (err) { console.error(err) }
 }, { timezone: 'Asia/Ho_Chi_Minh' })
 
-// Kiểm tra lịch hẹn mỗi phút
+let reminderRunning = false
 cron.schedule('* * * * *', async () => {
+  if (reminderRunning) return
+  reminderRunning = true
   try {
     const res = await db.query(`
       SELECT r.id, r.note, c.name, c.service, c.gmail
@@ -689,6 +693,7 @@ cron.schedule('* * * * *', async () => {
       await db.query('UPDATE reminders SET done=TRUE WHERE id=$1', [r.id])
     }
   } catch (err) { }
+  finally { reminderRunning = false }
 })
 
 // ── 14. LAUNCH ────────────────────────────────────────────
@@ -697,4 +702,3 @@ bot.launch({ dropPendingUpdates: true })
 process.once('SIGINT', () => bot.stop('SIGINT'))
 process.once('SIGTERM', () => bot.stop('SIGTERM'))
 console.log('🚀 Bot V2 Running OK')
-
