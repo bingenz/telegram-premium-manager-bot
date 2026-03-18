@@ -55,6 +55,12 @@ function addMonths(date, months){
   return d
 }
 
+function todayVN(){
+  const now = new Date()
+  const vn = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }))
+  return new Date(vn.getFullYear(), vn.getMonth(), vn.getDate())
+}
+
 function parseDateTimeFull(text){
   const m = text.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/)
   if(!m) return null
@@ -98,7 +104,6 @@ async function getCustomer(id){
 const SERVICE_LIST = ['ChatGPT Plus', 'YouTube', 'Gemini']
 const STATE_TIMEOUT_MS = 15 * 60 * 1000 // 15 phút
 const PAGE_SIZE = 7 // Quản lý khách hiển thị 7
-const STATS_PAGE_SIZE = 5 // Thống kê hiển thị 5 vì form dài
 
 let state = {}
 function setState(userId, data){
@@ -221,18 +226,59 @@ bot.action(/^mgr_view:(\d+)$/, async ctx => {
     + `📅 Hết hạn: ${format(u.expiry_date)}\n`
     + `⏳ Tình trạng: ${status}`
 
-  await ctx.editMessageText(msg, Markup.inlineKeyboard([
+  await ctx.editMessageText(msg, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([
     [Markup.button.callback('✏️ Sửa Tên', `ed_n:${id}`), Markup.button.callback('✏️ Sửa Ghi chú', `ed_g:${id}`)],
     [Markup.button.callback('✏️ Sửa Ngày BĐ', `ed_s:${id}`), Markup.button.callback('✏️ Sửa Hạn', `ed_e:${id}`)],
+    [Markup.button.callback('🔄 Đổi Dịch vụ', `svc_pick:${id}`)],
     [Markup.button.callback('⏰ Hẹn giờ', `rem_set:${id}`), Markup.button.callback('🗑 Xóa khách', `mgr_del:${id}`)],
     [Markup.button.callback('🔙 Quay lại danh sách', `mgr_back`)]
-  ]))
+  ]) })
 })
 
 bot.action('mgr_back', async ctx => {
   await ctx.answerCbQuery()
   const st = state[ctx.from.id] || { search: '', page: 0 }
   await renderCustomerList(ctx, st.search, st.page, true)
+})
+
+bot.action(/^svc_pick:(\d+)$/, async ctx => {
+  await ctx.answerCbQuery()
+  const id = parseInt(ctx.match[1])
+  const u = await getCustomer(id)
+  if(!u) return
+  await ctx.editMessageText(
+    `🔄 CHỌN DỊCH VỤ MỚI\n\nKhách: ${u.name}\nHiện tại: ${u.service}`,
+    Markup.inlineKeyboard([
+      SERVICE_LIST.map(sv => Markup.button.callback(sv === u.service ? `✅ ${sv}` : sv, `svc_set:${id}:${sv}`)),
+      [Markup.button.callback('🔙 Hủy', `mgr_view:${id}`)]
+    ])
+  )
+})
+
+bot.action(/^svc_set:(\d+):(.+)$/, async ctx => {
+  const id = parseInt(ctx.match[1])
+  const sv = ctx.match[2]
+  if(!SERVICE_LIST.includes(sv)) return ctx.answerCbQuery('❌ Dịch vụ không hợp lệ')
+  await db.query('UPDATE customers SET service=$1 WHERE id=$2', [sv, id])
+  await ctx.answerCbQuery(`✅ Đã đổi sang ${sv}`)
+  // Re-render view
+  const u = await getCustomer(id)
+  const d = daysFromNow(u.expiry_date)
+  const status = d <= 0 ? `quá ${-d} ngày` : `còn ${d} ngày`
+  const msg = `👤 THÔNG TIN KHÁCH HÀNG\n━━━━━━━━━━━━━━\n\n`
+    + `👤 Tên: ${u.name}\n`
+    + `📦 Gói: ${u.service}\n`
+    + `📝 Ghi chú: ${u.note || '_(trống)_'}\n`
+    + `📅 Bắt đầu: ${format(u.start_date)}\n`
+    + `📅 Hết hạn: ${format(u.expiry_date)}\n`
+    + `⏳ Tình trạng: ${status}`
+  await ctx.editMessageText(msg, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([
+    [Markup.button.callback('✏️ Sửa Tên', `ed_n:${id}`), Markup.button.callback('✏️ Sửa Ghi chú', `ed_g:${id}`)],
+    [Markup.button.callback('✏️ Sửa Ngày BĐ', `ed_s:${id}`), Markup.button.callback('✏️ Sửa Hạn', `ed_e:${id}`)],
+    [Markup.button.callback('🔄 Đổi Dịch vụ', `svc_pick:${id}`)],
+    [Markup.button.callback('⏰ Hẹn giờ', `rem_set:${id}`), Markup.button.callback('🗑 Xóa khách', `mgr_del:${id}`)],
+    [Markup.button.callback('🔙 Quay lại danh sách', `mgr_back`)]
+  ]) })
 })
 
 bot.action(/^mgr_del:(\d+)$/, async ctx => {
@@ -265,77 +311,49 @@ bot.action(/^ed_([ngse]):(\d+)$/, async ctx => {
 })
 
 
-// ================= 3. THỐNG KÊ (CÓ PHÂN TRANG) =================
-const FILTERS = ['A', 'C', 'Y', 'G'] // All, Chatgpt, Youtube, Gemini
+// ================= 3. THỐNG KÊ =================
+const FILTERS = ['A', 'C', 'Y', 'G']
 const FILTER_NAMES = { 'A': 'Tất cả', 'C': 'GPT Plus', 'Y': 'YouTube', 'G': 'Gemini' }
-const SORTS = ['ea', 'ed', 'sd', 'sa'] // Expiry Asc, Expiry Desc, Start Desc, Start Asc
-const SORT_NAMES = { 'ea': 'Sắp hết hạn', 'ed': 'Hạn dài nhất', 'sd': 'Mới nhất', 'sa': 'Cũ nhất' }
+const SORTS = ['ea', 'ed', 'sd', 'sa']
+const SORT_LABELS = { 'ea': 'Sắp hết hạn', 'ed': 'Dài nhất', 'sd': 'Mới đăng ký', 'sa': 'Cũ nhất' }
 
 bot.hears('📊 Thống kê', async ctx => {
-  await renderStats(ctx, 'A', 'ea', 0, false)
+  await renderStats(ctx, 'A', 'ea', false)
 })
 
-async function renderStats(ctx, filter, sort, page, isEdit){
-  let where = '', params = [], order = ''
+async function renderStats(ctx, filter, sort, isEdit){
+  let where = '', params = []
   if(filter === 'C') { where = 'WHERE service=$1'; params.push('ChatGPT Plus') }
   else if(filter === 'Y') { where = 'WHERE service=$1'; params.push('YouTube') }
   else if(filter === 'G') { where = 'WHERE service=$1'; params.push('Gemini') }
 
-  if(sort === 'ea') order = 'ORDER BY expiry_date ASC'
-  if(sort === 'ed') order = 'ORDER BY expiry_date DESC'
-  if(sort === 'sd') order = 'ORDER BY start_date DESC'
-  if(sort === 'sa') order = 'ORDER BY start_date ASC'
-
-  const res = await db.query(`SELECT * FROM customers ${where} ${order}`, params)
+  const orderMap = { 'ea': 'expiry_date ASC', 'ed': 'expiry_date DESC', 'sd': 'start_date DESC', 'sa': 'start_date ASC' }
+  const res = await db.query(`SELECT * FROM customers ${where} ORDER BY ${orderMap[sort]}`, params)
   const rows = res.rows
-
-  // Tính toán số liệu tổng quan
   const total = rows.length
   const soon = rows.filter(u => { const d = daysFromNow(u.expiry_date); return d > 0 && d <= 7 }).length
   const expired = rows.filter(u => daysFromNow(u.expiry_date) <= 0).length
 
-  // Xử lý phân trang
-  const totalPages = Math.ceil(total / STATS_PAGE_SIZE) || 1
-  if(page >= totalPages) page = totalPages - 1
-  if(page < 0) page = 0
+  const nextSort = SORTS[(SORTS.indexOf(sort) + 1) % SORTS.length]
 
-  const start = page * STATS_PAGE_SIZE
-  const currentRows = rows.slice(start, start + STATS_PAGE_SIZE)
-
-  let msg = `📊 THỐNG KÊ (${FILTER_NAMES[filter]} - ${SORT_NAMES[sort]})\n━━━━━━━━━━━━━━\n`
+  let msg = `📊 THỐNG KÊ — ${FILTER_NAMES[filter]}\n━━━━━━━━━━━━━━\n`
   msg += `Tổng: ${total} · 🟠 Sắp HH: ${soon} · 🔴 Đã HH: ${expired}\n━━━━━━━━━━━━━━\n`
-  
-  if(!currentRows.length) {
+
+  if(!rows.length) {
     msg += '\n✅ Không có dữ liệu.'
   } else {
-    currentRows.forEach(u => {
+    rows.forEach(u => {
       const diff = daysFromNow(u.expiry_date)
       const icon = diff <= 0 ? '🔴' : diff <= 3 ? '🟠' : (diff <= 7 ? '🟡' : '🟢')
       const status = diff <= 0 ? `quá ${Math.abs(diff)}` : `còn ${diff}`
-      
-      msg += `\n${icon} ${u.name} (${u.service})\n📝 ${u.note || '_(trống)_'}\n📅 Bắt đầu: ${format(u.start_date)}\n📅 Hết hạn: ${format(u.expiry_date)} (${status} ngày)\n━━━━━━━━━━━━━━\n`
+      msg += `\n${icon} ${u.name} (${u.service})\n📝 ${u.note || '_(trống)_'}\n📅 ${format(u.start_date)} → ${format(u.expiry_date)} (${status} ngày)\n━━━━━━━━━━━━━━\n`
     })
   }
 
-  // Nút Lọc và Sắp xếp
-  const nextFilter = FILTERS[(FILTERS.indexOf(filter) + 1) % FILTERS.length]
-  const nextSort = SORTS[(SORTS.indexOf(sort) + 1) % SORTS.length]
-
-  const actionKb = [
-    Markup.button.callback(`📁 Lọc: ${FILTER_NAMES[filter]} 🔄`, `st:${nextFilter}:${sort}:0`), // Reset về trang 0 khi lọc
-    Markup.button.callback(`🔃 Xếp: ${SORT_NAMES[sort]} 🔄`, `st:${filter}:${nextSort}:0`) // Reset về trang 0 khi đổi xếp
-  ]
-
-  // Nút phân trang
-  const pageKb = []
-  if(page > 0) pageKb.push(Markup.button.callback('⬅️ Trang trước', `st:${filter}:${sort}:${page - 1}`))
-  pageKb.push(Markup.button.callback(`${page + 1}/${totalPages}`, 'noop'))
-  if(page < totalPages - 1) pageKb.push(Markup.button.callback('Trang sau ➡️', `st:${filter}:${sort}:${page + 1}`))
-
-  const kbArray = [actionKb]
-  if(pageKb.length > 1) kbArray.push(pageKb)
-
-  const kb = Markup.inlineKeyboard(kbArray)
+  const kb = Markup.inlineKeyboard([
+    FILTERS.map(f => Markup.button.callback(filter === f ? `✅ ${FILTER_NAMES[f]}` : FILTER_NAMES[f], `st:${f}:${sort}`)),
+    [Markup.button.callback(`🔃 ${SORT_LABELS[sort]} →`, `st:${filter}:${nextSort}`)]
+  ])
 
   if(isEdit) {
     try { await ctx.editMessageText(msg, kb) } catch(e){}
@@ -344,12 +362,9 @@ async function renderStats(ctx, filter, sort, page, isEdit){
   }
 }
 
-bot.action(/^st:([ACYG]):(ea|ed|sd|sa):(\d+)$/, async ctx => {
+bot.action(/^st:([ACYG]):(ea|ed|sd|sa)$/, async ctx => {
   await ctx.answerCbQuery()
-  const filter = ctx.match[1]
-  const sort = ctx.match[2]
-  const page = parseInt(ctx.match[3])
-  await renderStats(ctx, filter, sort, page, true)
+  await renderStats(ctx, ctx.match[1], ctx.match[2], true)
 })
 
 
@@ -488,13 +503,13 @@ bot.on('text', async ctx => {
   if(s.step === 'add_service'){
     if(!SERVICE_LIST.includes(text)) return ctx.reply('❌ Chọn dịch vụ hợp lệ từ bàn phím:')
     s.service = text; s.step = 'add_form'
-    return ctx.reply(`📋 Nhập thông tin (4 dòng):\n\nTên\nGhi chú (gõ - nếu không có)\nNgày bắt đầu (ddmmyy)\nSố tháng\n\nVí dụ:\nNguyen Van A\nzalo: 0901234567\n210226\n1`, Markup.removeKeyboard())
+    return ctx.reply(`📋 Nhập thông tin (4 dòng):\n\nTên\nGhi chú (gõ - nếu không có)\nNgày bắt đầu (ddmmyy hoặc - = hôm nay)\nSố tháng\n\nVí dụ:\nNguyen Van A\nzalo: 0901234567\n-\n1`, Markup.removeKeyboard())
   }
   if(s.step === 'add_form'){
     const lines = text.split('\n').map(l=>l.trim()).filter(l=>l)
     if(lines.length < 4) return ctx.reply('❌ Cần đủ 4 dòng. Nhập lại:')
-    const start = parseShortDate(lines[2])
-    if(!start) return ctx.reply('❌ Ngày không hợp lệ. Ví dụ: 210226. Nhập lại cả 4 dòng:')
+    const start = lines[2] === '-' ? todayVN() : parseShortDate(lines[2])
+    if(!start) return ctx.reply('❌ Ngày không hợp lệ. Ví dụ: 210226 hoặc gõ - để dùng hôm nay. Nhập lại cả 4 dòng:')
     if(!isValidMonths(lines[3])) return ctx.reply('❌ Số tháng không hợp lệ. Nhập lại cả 4 dòng:')
     
     await db.query('INSERT INTO customers(service,name,note,start_date,expiry_date) VALUES($1,$2,$3,$4,$5)',
@@ -580,4 +595,3 @@ bot.launch({ dropPendingUpdates: true })
 process.once('SIGINT', () => bot.stop('SIGINT'))
 process.once('SIGTERM', () => bot.stop('SIGTERM'))
 console.log('🚀 Bot V2 Running OK')
-
