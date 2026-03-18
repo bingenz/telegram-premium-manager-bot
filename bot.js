@@ -221,7 +221,7 @@ bot.action(/^mgr_view:(\d+)$/, async ctx => {
   const msg = `👤 THÔNG TIN KHÁCH HÀNG\n━━━━━━━━━━━━━━\n\n`
     + `👤 Tên: ${u.name}\n`
     + `📦 Gói: ${u.service}\n`
-    + `📝 Ghi chú: ${u.note || '_(trống)_'}\n`
+    + (u.note ? `📝 Ghi chú: ${u.note}\n` : '')
     + `📅 Bắt đầu: ${format(u.start_date)}\n`
     + `📅 Hết hạn: ${format(u.expiry_date)}\n`
     + `⏳ Tình trạng: ${status}`
@@ -268,7 +268,7 @@ bot.action(/^svc_set:(\d+):(.+)$/, async ctx => {
   const msg = `👤 THÔNG TIN KHÁCH HÀNG\n━━━━━━━━━━━━━━\n\n`
     + `👤 Tên: ${u.name}\n`
     + `📦 Gói: ${u.service}\n`
-    + `📝 Ghi chú: ${u.note || '_(trống)_'}\n`
+    + (u.note ? `📝 Ghi chú: ${u.note}\n` : '')
     + `📅 Bắt đầu: ${format(u.start_date)}\n`
     + `📅 Hết hạn: ${format(u.expiry_date)}\n`
     + `⏳ Tình trạng: ${status}`
@@ -302,7 +302,7 @@ bot.action(/^ed_([ngse]):(\d+)$/, async ctx => {
   const type = ctx.match[1]; const id = parseInt(ctx.match[2])
   let prompt = ''
   if(type==='n') prompt = 'Nhập TÊN mới:'
-  if(type==='g') prompt = 'Nhập GHI CHÚ mới (gõ - để xóa ghi chú):'
+  if(type==='g') prompt = 'Nhập GHI CHÚ mới (gõ 0 để xóa ghi chú):'
   if(type==='s') prompt = 'Nhập NGÀY BẮT ĐẦU mới (dd/mm/yyyy):'
   if(type==='e') prompt = 'Nhập NGÀY HẾT HẠN mới (dd/mm/yyyy):'
   
@@ -346,7 +346,7 @@ async function renderStats(ctx, filter, sort, isEdit){
       const diff = daysFromNow(u.expiry_date)
       const icon = diff <= 0 ? '🔴' : diff <= 3 ? '🟠' : (diff <= 7 ? '🟡' : '🟢')
       const status = diff <= 0 ? `quá ${Math.abs(diff)}` : `còn ${diff}`
-      msg += `\n${icon} ${u.name} (${u.service})\n📝 ${u.note || '_(trống)_'}\n📅 ${format(u.start_date)} → ${format(u.expiry_date)} (${status} ngày)\n━━━━━━━━━━━━━━\n`
+      msg += `\n${icon} ${u.name} (${u.service})\n${u.note ? '📝 ' + u.note + '\n' : ''}📅 ${format(u.start_date)} → ${format(u.expiry_date)} (${status} ngày)\n━━━━━━━━━━━━━━\n`
     })
   }
 
@@ -503,17 +503,40 @@ bot.on('text', async ctx => {
   if(s.step === 'add_service'){
     if(!SERVICE_LIST.includes(text)) return ctx.reply('❌ Chọn dịch vụ hợp lệ từ bàn phím:')
     s.service = text; s.step = 'add_form'
-    return ctx.reply(`📋 Nhập thông tin (4 dòng):\n\nTên\nGhi chú (gõ - nếu không có)\nNgày bắt đầu (ddmmyy hoặc - = hôm nay)\nSố tháng\n\nVí dụ:\nNguyen Van A\nzalo: 0901234567\n-\n1`, Markup.removeKeyboard())
+    return ctx.reply(
+      `📋 Nhập thông tin khách — mỗi mục 1 dòng:\n\n`
+      + `*Tối thiểu (ngày = hôm nay, không ghi chú):*\nTên\nSố tháng\n\n`
+      + `*Có ghi chú:*\nTên\nGhi chú\nSố tháng\n\n`
+      + `*Có ngày bắt đầu:*\nTên\nNgày (vd: 110125)\nSố tháng\n\n`
+      + `*Đầy đủ:*\nTên\nGhi chú\nNgày\nSố tháng`,
+      { parse_mode: 'Markdown', ...Markup.removeKeyboard() }
+    )
   }
   if(s.step === 'add_form'){
     const lines = text.split('\n').map(l=>l.trim()).filter(l=>l)
-    if(lines.length < 4) return ctx.reply('❌ Cần đủ 4 dòng. Nhập lại:')
-    const start = lines[2] === '-' ? todayVN() : parseShortDate(lines[2])
-    if(!start) return ctx.reply('❌ Ngày không hợp lệ. Ví dụ: 210226 hoặc gõ - để dùng hôm nay. Nhập lại cả 4 dòng:')
-    if(!isValidMonths(lines[3])) return ctx.reply('❌ Số tháng không hợp lệ. Nhập lại cả 4 dòng:')
-    
+    if(lines.length < 2) return ctx.reply('❌ Cần ít nhất 2 dòng. Nhập lại:')
+
+    let name, note = null, start = todayVN(), monthStr
+
+    if(lines.length === 2){
+      // Tên / Tháng
+      name = lines[0]; monthStr = lines[1]
+    } else if(lines.length === 3){
+      name = lines[0]
+      const tryDate = parseShortDate(lines[1])
+      if(tryDate){ start = tryDate; monthStr = lines[2] }        // Tên / Ngày / Tháng
+      else { note = lines[1]; monthStr = lines[2] }              // Tên / Ghi chú / Tháng
+    } else {
+      // Tên / Ghi chú / Ngày / Tháng
+      name = lines[0]; note = lines[1]
+      start = parseShortDate(lines[2]); monthStr = lines[3]
+      if(!start) return ctx.reply('❌ Ngày không hợp lệ. Ví dụ: 110125. Nhập lại:')
+    }
+
+    if(!isValidMonths(monthStr)) return ctx.reply('❌ Số tháng không hợp lệ. Nhập lại:')
+
     await db.query('INSERT INTO customers(service,name,note,start_date,expiry_date) VALUES($1,$2,$3,$4,$5)',
-      [s.service, lines[0], lines[1] === '-' ? null : lines[1], start, addMonths(start, parseInt(lines[3]))])
+      [s.service, name, note, start, addMonths(start, parseInt(monthStr))])
     clearState(ctx.from.id)
     ctx.reply('✅ Đã thêm khách hàng thành công!')
     return mainMenu(ctx)
@@ -523,7 +546,7 @@ bot.on('text', async ctx => {
   if(s.step.startsWith('edit_')){
     let val = text, col = ''
     if(s.step === 'edit_n') col = 'name'
-    if(s.step === 'edit_g') { col = 'note'; val = text === '-' ? null : text }
+    if(s.step === 'edit_g') { col = 'note'; val = text === '0' ? null : text }
     if(s.step === 'edit_s' || s.step === 'edit_e'){
       val = parseDateVN(text)
       if(!val) return ctx.reply('❌ Ngày không hợp lệ. Nhập dd/mm/yyyy (Ví dụ: 01/02/2026):')
