@@ -256,7 +256,7 @@ bot.action('fl_cycle', async ctx => {
   await renderList(ctx, s.search || '', 0, next, true)
 })
 
-bot.action(/^pg:(d+)$/, async ctx => {
+bot.action(/^pg:(\d+)$/, async ctx => {
   await ctx.answerCbQuery()
   const s = state[ctx.from.id]
   if (!s) return
@@ -296,8 +296,8 @@ async function renderDetail(ctx, id) {
 
 bot.action('back', async ctx => {
   await ctx.answerCbQuery()
-  const s = state[ctx.from.id] || { search: '', page: 0 }
-  await renderList(ctx, s.search, s.page, true)
+  const s = state[ctx.from.id] || { search: '', page: 0, filter: 'all' }
+  await renderList(ctx, s.search || '', s.page || 0, s.filter || 'all', true)
 })
 
 // Toggle nhắc tháng
@@ -332,6 +332,7 @@ bot.action(/^svc_set:(\d+):(.+)$/, async ctx => {
 
 // Xóa
 bot.action(/^del:(\d+)$/, async ctx => {
+  await ctx.answerCbQuery()
   const id = +ctx.match[1]
   const u = await getCustomer(id)
   await ctx.editMessageText(`⚠️ Xóa *${u?.name}*?`, {
@@ -344,8 +345,8 @@ bot.action(/^del:(\d+)$/, async ctx => {
 bot.action(/^del_ok:(\d+)$/, async ctx => {
   await db.query('DELETE FROM customers WHERE id=$1', [+ctx.match[1]])
   await ctx.answerCbQuery('✅ Đã xóa')
-  const s = state[ctx.from.id] || { search: '', page: 0 }
-  await renderList(ctx, s.search, s.page, true)
+  const s = state[ctx.from.id] || { search: '', page: 0, filter: 'all' }
+  await renderList(ctx, s.search || '', s.page || 0, s.filter || 'all', true)
 })
 
 // Sửa thông tin
