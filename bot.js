@@ -222,10 +222,6 @@ async function renderList(ctx, search, page, filter, isEdit) {
 
   const kb = []
 
-  // Nút cycle filter — nhấn để chuyển sang dịch vụ tiếp theo
-  const nextFilter = FILTER_CYCLE[(FILTER_CYCLE.indexOf(filter) + 1) % FILTER_CYCLE.length]
-  kb.push([Markup.button.callback(filterLabel, 'fl_cycle')])
-
   chunk.forEach(u => {
     const d = daysLeft(u.expiry_date)
     kb.push([Markup.button.callback(
@@ -234,11 +230,15 @@ async function renderList(ctx, search, page, filter, isEdit) {
     )])
   })
 
+  // Phân trang — dùng « » để không nhầm với icon dịch vụ
   const nav = []
-  if (page > 0) nav.push(Markup.button.callback('◀️', 'pg:' + (page-1)))
+  if (page > 0) nav.push(Markup.button.callback('«', 'pg:' + (page-1)))
   nav.push(Markup.button.callback((page+1) + '/' + total, 'noop'))
-  if (page < total-1) nav.push(Markup.button.callback('▶️', 'pg:' + (page+1)))
+  if (page < total-1) nav.push(Markup.button.callback('»', 'pg:' + (page+1)))
   if (nav.length > 1) kb.push(nav)
+
+  // Nút cycle filter — ở dưới cùng
+  kb.push([Markup.button.callback('🔄 Lọc: ' + filterLabel.replace('🔽 ', ''), 'fl_cycle')])
 
   const opts = { parse_mode: 'Markdown', ...Markup.inlineKeyboard(kb) }
   if (isEdit) { try { await ctx.editMessageText(msg, opts) } catch(e){} }
@@ -578,4 +578,3 @@ bot.launch({ dropPendingUpdates: true })
 process.once('SIGINT', () => bot.stop('SIGINT'))
 process.once('SIGTERM', () => bot.stop('SIGTERM'))
 console.log('🚀 Bot running')
-
