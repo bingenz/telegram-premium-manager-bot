@@ -559,7 +559,7 @@ bot.on('text', async ctx => {
 
     await db.query(`UPDATE customers SET ${col}=$1 WHERE id=$2`, [val, s.id])
     clearState(ctx.from.id)
-    ctx.reply('✅ Đã cập nhật!')
+    ctx.reply('✅ Đã cập nhật!', Markup.removeKeyboard())
     bot.handleUpdate({ callback_query: { id: '0', from: ctx.from, message: ctx.message, data: `view:${s.id}` } })
     return
   }
