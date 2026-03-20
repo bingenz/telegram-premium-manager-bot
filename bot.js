@@ -171,37 +171,73 @@ bot.action(/^add_(yes|no)$/, async ctx => {
 // ═══════════════════════════════════════════
 // 2. KHÁCH HÀNG — danh sách + chi tiết
 // ═══════════════════════════════════════════
+
+// Thứ tự cycle filter
+const FILTER_CYCLE = ['all', 'ChatGPT Plus', 'YouTube', 'GPT Business']
+const FILTER_LABEL = {
+  all:            '🔽 Tất cả',
+  'ChatGPT Plus': '🔽 ChatGPT Plus',
+  'YouTube':      '🔽 YouTube',
+  'GPT Business': '🔽 GPT Business'
+}
+
+// Alias tìm kiếm nhanh
+function resolveSearch(text) {
+  const t = text.trim().toLowerCase()
+  if (t === 'yt') return { search: '', filter: 'YouTube' }
+  if (t === 'gpt') return { search: '', filter: 'ChatGPT Plus' }
+  if (t === 'gptb' || t === 'biz' || t === 'business') return { search: '', filter: 'GPT Business' }
+  if (t === 'all' || t === 'tat ca') return { search: '', filter: 'all' }
+  return { search: text.trim(), filter: null } // giữ filter cũ
+}
+
 bot.hears('👥 Khách hàng', async ctx => {
-  setState(ctx.from.id, { step: 'list', search: '', page: 0 })
-  await renderList(ctx, '', 0, false)
+  setState(ctx.from.id, { step: 'list', search: '', page: 0, filter: 'all' })
+  await renderList(ctx, '', 0, 'all', false)
 })
 
-async function renderList(ctx, search, page, isEdit) {
-  let q = 'SELECT * FROM customers', p = []
-  if (search) { q += ' WHERE name ILIKE $1 OR note ILIKE $1 OR service ILIKE $1'; p.push(`%${search}%`) }
+async function renderList(ctx, search, page, filter, isEdit) {
+  let q = 'SELECT * FROM customers', p = [], conds = []
+  if (filter !== 'all') { conds.push('service=$' + (p.length+1)); p.push(filter) }
+  if (search) {
+    const idx = p.length+1
+    conds.push('(name ILIKE $' + idx + ' OR note ILIKE $' + idx + ')')
+    p.push('%' + search + '%')
+  }
+  if (conds.length) q += ' WHERE ' + conds.join(' AND ')
   q += ' ORDER BY expiry_date ASC'
+
   const rows = (await db.query(q, p)).rows
   const total = Math.ceil(rows.length / PAGE_SIZE) || 1
   page = Math.min(Math.max(page, 0), total - 1)
-  setState(ctx.from.id, { step: 'list', search, page })
+  setState(ctx.from.id, { step: 'list', search, page, filter })
 
   const chunk = rows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE)
-  let msg = search
-    ? `🔍 Kết quả "${search}" (${rows.length})\n`
-    : `👥 *KHÁCH HÀNG* — ${rows.length} người\n`
-  msg += `_Gõ tên/ghi chú để tìm kiếm_\n━━━━━━━━━━━━━━\n`
+
+  const filterLabel = FILTER_LABEL[filter] || '🔽 Tất cả'
+  let msg = '👥 *KHÁCH HÀNG* — ' + rows.length + ' người\n'
+  if (search) msg += '🔍 Tìm: "' + search + '"\n'
+  msg += '_Gõ tên, ghi chú, yt/gpt/biz để lọc_\n━━━━━━━━━━━━━━\n'
   if (!chunk.length) msg += 'Chưa có khách nào.'
 
-  const kb = chunk.map(u => {
+  const kb = []
+
+  // Nút cycle filter — nhấn để chuyển sang dịch vụ tiếp theo
+  const nextFilter = FILTER_CYCLE[(FILTER_CYCLE.indexOf(filter) + 1) % FILTER_CYCLE.length]
+  kb.push([Markup.button.callback(filterLabel, 'fl_cycle')])
+
+  chunk.forEach(u => {
     const d = daysLeft(u.expiry_date)
-    const icon = statusIcon(d)
-    const bell = u.monthly_remind ? '🔔' : ''
-    return [Markup.button.callback(`${icon}${bell} ${u.name} — ${u.service}`, `view:${u.id}`)]
+    kb.push([Markup.button.callback(
+      statusIcon(d) + (u.monthly_remind ? '🔔' : '') + ' ' + u.name + ' — ' + u.service,
+      'view:' + u.id
+    )])
   })
+
   const nav = []
-  if (page > 0) nav.push(Markup.button.callback('◀️', `pg:${page-1}`))
-  nav.push(Markup.button.callback(`${page+1}/${total}`, 'noop'))
-  if (page < total-1) nav.push(Markup.button.callback('▶️', `pg:${page+1}`))
+  if (page > 0) nav.push(Markup.button.callback('◀️', 'pg:' + (page-1)))
+  nav.push(Markup.button.callback((page+1) + '/' + total, 'noop'))
+  if (page < total-1) nav.push(Markup.button.callback('▶️', 'pg:' + (page+1)))
   if (nav.length > 1) kb.push(nav)
 
   const opts = { parse_mode: 'Markdown', ...Markup.inlineKeyboard(kb) }
@@ -209,12 +245,23 @@ async function renderList(ctx, search, page, isEdit) {
   else await ctx.reply(msg, { ...cancelKb, ...opts })
 }
 
-bot.action(/^pg:(\d+)$/, async ctx => {
+// Nhấn nút cycle → chuyển filter tiếp theo
+bot.action('fl_cycle', async ctx => {
   await ctx.answerCbQuery()
   const s = state[ctx.from.id]
   if (!s) return
-  await renderList(ctx, s.search || '', +ctx.match[1], true)
+  const cur = s.filter || 'all'
+  const next = FILTER_CYCLE[(FILTER_CYCLE.indexOf(cur) + 1) % FILTER_CYCLE.length]
+  await renderList(ctx, s.search || '', 0, next, true)
 })
+
+bot.action(/^pg:(d+)$/, async ctx => {
+  await ctx.answerCbQuery()
+  const s = state[ctx.from.id]
+  if (!s) return
+  await renderList(ctx, s.search || '', +ctx.match[1], s.filter || 'all', true)
+})
+
 
 bot.action(/^view:(\d+)$/, async ctx => {
   await ctx.answerCbQuery()
@@ -393,9 +440,11 @@ bot.on('text', async ctx => {
   const s = state[ctx.from.id]
   if (!s) return
 
-  // Tìm kiếm trong danh sách
+  // Tìm kiếm trong danh sách (hỗ trợ alias: yt, gpt, biz)
   if (s.step === 'list') {
-    return renderList(ctx, text, 0, false)
+    const { search, filter } = resolveSearch(text)
+    const newFilter = filter !== null ? filter : (s.filter || 'all')
+    return renderList(ctx, search, 0, newFilter, false)
   }
 
   // ── THÊM KHÁCH ──
