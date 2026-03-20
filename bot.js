@@ -106,7 +106,8 @@ function mainMenu(ctx) {
   clearState(ctx.from.id)
   return ctx.reply('👑 PREMIUM MANAGER', Markup.keyboard([
     ['➕ Thêm khách', '👥 Khách hàng'],
-    ['⚠️ Sắp hết hạn', '⚙️ Cài đặt']
+    ['⚠️ Sắp hết hạn', '🔔 Lịch nhắc'],
+    ['⚙️ Cài đặt']
   ]).resize())
 }
 
@@ -382,7 +383,61 @@ bot.hears('⚠️ Sắp hết hạn', async ctx => {
 
 
 // ═══════════════════════════════════════════
-// 4. CÀI ĐẶT
+// 4. LỊCH NHẮC HÀNG THÁNG
+// ═══════════════════════════════════════════
+bot.hears('🔔 Lịch nhắc', async ctx => {
+  const rows = (await db.query(
+    `SELECT * FROM customers WHERE monthly_remind = TRUE AND expiry_date > NOW() ORDER BY
+      EXTRACT(DAY FROM (start_date AT TIME ZONE 'Asia/Ho_Chi_Minh')) ASC, name ASC`
+  )).rows
+
+  if (!rows.length) return ctx.reply('📭 Chưa có khách nào bật nhắc tháng.')
+
+  // Tính ngày nhắc tiếp theo cho từng khách
+  const todayVNDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }))
+  const todayDay = todayVNDate.getDate()
+  const thisMonth = todayVNDate.getMonth()
+  const thisYear = todayVNDate.getFullYear()
+
+  function nextRemindDate(startDate) {
+    const remindDay = new Date(startDate).toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh', day: 'numeric' })
+    const d = parseInt(remindDay)
+    // Thử tháng này trước
+    let next = new Date(thisYear, thisMonth, d)
+    if (next <= todayVNDate) next = new Date(thisYear, thisMonth + 1, d) // qua tháng sau
+    return next
+  }
+
+  let msg = `🔔 *LỊCH NHẮC HÀNG THÁNG* (${rows.length} khách)
+━━━━━━━━━━━━━━
+`
+
+  rows.forEach((u, i) => {
+    const startDay = parseInt(new Date(u.start_date).toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh', day: 'numeric' }))
+    const next = nextRemindDate(u.start_date)
+    const daysUntil = Math.ceil((next - todayVNDate) / 86400000)
+    const nextStr = next.toLocaleDateString('vi-VN')
+    const untilStr = daysUntil === 0 ? '_(hôm nay!)_' : `_(còn ${daysUntil} ngày)_`
+
+    msg += `
+${i+1}. *${u.name}* — ${u.service}
+`
+    if (u.note) msg += `   📝 ${u.note}
+`
+    msg += `   🔔 Nhắc ngày *${startDay}* mỗi tháng
+`
+    msg += `   ⏭ Lần tới: ${nextStr} ${untilStr}
+`
+    msg += `   📅 Hết hạn: ${fmt(u.expiry_date)} (còn ${daysLeft(u.expiry_date)} ngày)
+`
+  })
+
+  ctx.reply(msg, { parse_mode: 'Markdown' })
+})
+
+
+// ═══════════════════════════════════════════
+// 5. CÀI ĐẶT
 // ═══════════════════════════════════════════
 bot.hears('⚙️ Cài đặt', ctx => {
   ctx.reply('⚙️ *CÀI ĐẶT*', {
@@ -578,3 +633,4 @@ bot.launch({ dropPendingUpdates: true })
 process.once('SIGINT', () => bot.stop('SIGINT'))
 process.once('SIGTERM', () => bot.stop('SIGTERM'))
 console.log('🚀 Bot running')
+
