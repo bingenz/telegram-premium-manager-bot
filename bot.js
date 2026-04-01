@@ -7,13 +7,18 @@ const cron = require('node-cron')
 const ExcelJS = require('exceljs')
 const fs = require('fs')
 const http = require('http')
+const os = require('os')
+const path = require('path')
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
 const ADMIN_ID = Number(process.env.ADMIN_ID)
+const DB_SSL_REJECT_UNAUTHORIZED = process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true'
 
 const db = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: process.env.DATABASE_URL
+    ? { rejectUnauthorized: DB_SSL_REJECT_UNAUTHORIZED }
+    : undefined
 })
 
 // ================= INIT DB =================
@@ -469,10 +474,13 @@ bot.action('export', async ctx => {
     sd: fmt(u.start_date), ed: fmt(u.expiry_date),
     d: daysLeft(u.expiry_date), mr: u.monthly_remind ? 'Có' : 'Không'
   }))
-  const file = '/tmp/customers.xlsx'
-  await wb.xlsx.writeFile(file)
-  await ctx.replyWithDocument({ source: file })
-  fs.unlinkSync(file)
+  const file = path.join(os.tmpdir(), `customers-${Date.now()}-${ctx.from.id}.xlsx`)
+  try {
+    await wb.xlsx.writeFile(file)
+    await ctx.replyWithDocument({ source: file })
+  } finally {
+    if (fs.existsSync(file)) fs.unlinkSync(file)
+  }
 })
 
 bot.action('reset', async ctx => {

@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+node_modules/
+*.log
+dist/
+build/
+.DS_Store
+coverage/
+tmp/
+*.xlsx
