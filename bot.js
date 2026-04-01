@@ -358,7 +358,7 @@ bot.action(/^del_ok:(\d+)$/, async ctx => {
 bot.action(/^ed_([ngse]):(\d+)$/, async ctx => {
   await ctx.answerCbQuery()
   const type = ctx.match[1], id = +ctx.match[2]
-  const prompts = { n: 'Nhập tên mới:', g: 'Nhập ghi chú mới (gõ 0 để xóa):', s: 'Nhập ngày bắt đầu (dd/mm/yyyy):', e: 'Nhập ngày hết hạn (dd/mm/yyyy):' }
+  const prompts = { n: 'Nhập tên mới:', g: 'Nhập ghi chú mới (gõ 0 để xóa):', s: 'Nhập ngày bắt đầu (dd/mm/yyyy):', e: 'Nhập số ngày còn lại:' }
   setState(ctx.from.id, { step: `edit_${type}`, id })
   ctx.reply(`✏️ ${prompts[type]}`, cancelKb)
 })
@@ -559,10 +559,20 @@ bot.on('text', async ctx => {
 
     if (type === 'n') col = 'name'
     if (type === 'g') { col = 'note'; val = text === '0' ? null : text }
-    if (type === 's' || type === 'e') {
+    if (type === 's') {
       val = parseDateVN(text)
       if (!val) return ctx.reply('❌ Ngày không hợp lệ. Nhập dd/mm/yyyy:')
-      col = type === 's' ? 'start_date' : 'expiry_date'
+      col = 'start_date'
+    }
+    if (type === 'e') {
+      const days = Number.parseInt(text, 10)
+      if (!Number.isInteger(days) || days < 0 || days > 3650) {
+        return ctx.reply('❌ Số ngày không hợp lệ. Nhập số từ 0 đến 3650:')
+      }
+      const expiry = todayVN()
+      expiry.setDate(expiry.getDate() + days)
+      val = expiry
+      col = 'expiry_date'
     }
 
     await db.query(`UPDATE customers SET ${col}=$1 WHERE id=$2`, [val, s.id])
@@ -642,4 +652,5 @@ bot.launch({ dropPendingUpdates: true })
 process.once('SIGINT', () => bot.stop('SIGINT'))
 process.once('SIGTERM', () => bot.stop('SIGTERM'))
 console.log('🚀 Bot running')
+
 
