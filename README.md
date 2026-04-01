@@ -2,6 +2,16 @@
 
 A Telegram bot for managing premium customers, tracking subscription periods, scheduling renewal reminders, and exporting customer data to Excel.
 
+## Usage Notice
+
+This repository is public for portfolio and reference purposes only.
+
+- viewing and learning from the project is allowed
+- commercial use is not allowed
+- redistribution is not allowed
+- reselling this code or deploying it as your own product is not allowed
+- creating derivative commercial versions without written permission is not allowed
+
 ## Overview
 
 This project is designed for a single admin workflow:
@@ -105,13 +115,10 @@ The bot stores customer records in a single `customers` table:
 
 ## Intellectual Property
 
-This repository is public for reference and portfolio purposes. Source code, workflow ideas, and implementation details remain associated with the author unless explicitly licensed otherwise.
+Copyright belongs to the author.
 
-If you want stronger protection:
-
-- keep the production version private
-- add a custom license or an `All Rights Reserved` notice
-- keep sensitive business logic and operational data outside the public repo
+This repository is shared publicly to present the project, its structure, and its workflow.
+It is not published as open source for reuse, resale, redistribution, or commercial deployment.
 
 ## Roadmap Ideas
 

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Le Thuan. All rights reserved.
+// Public portfolio version only. Unauthorized reuse, resale, or redistribution is prohibited.
+
 process.env.NTBA_FIX_350 = 1
 require('dotenv').config()
 
