@@ -10,18 +10,13 @@ const cron = require('node-cron')
 const ExcelJS = require('exceljs')
 const fs = require('fs')
 const http = require('http')
-const os = require('os')
-const path = require('path')
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
 const ADMIN_ID = Number(process.env.ADMIN_ID)
-const DB_SSL_REJECT_UNAUTHORIZED = process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true'
 
 const db = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL
-    ? { rejectUnauthorized: DB_SSL_REJECT_UNAUTHORIZED }
-    : undefined
+  ssl: { rejectUnauthorized: false }
 })
 
 // ================= INIT DB =================
@@ -170,13 +165,8 @@ bot.action(/^add_(yes|no)$/, async ctx => {
   )
   clearState(ctx.from.id)
   const startDay = s.start.getDate()
-  let ok = 'Added customer\n\n'
-  ok += 'Customer: ' + s.name + '\n'
-  ok += 'Service: ' + s.service + '\n'
-  if (s.note) ok += 'Note: ' + s.note + '\n'
-  ok += 'Period: ' + fmt(s.start) + ' -> ' + fmt(expiry) + '\n'
-  ok += 'Remaining days: ' + daysLeft(expiry) + '\n'
-  ok += remind ? 'Monthly reminder: ON (day ' + startDay + ' at 09:00)' : 'Monthly reminder: OFF'
+  let ok = `✅ Đã thêm *${s.name}* (${s.service})\n`
+  ok += remind ? `🔔 Sẽ nhắc ngày ${startDay} mỗi tháng lúc 9:00` : `🔕 Không nhắc tháng`
   await ctx.editMessageText(ok, { parse_mode: 'Markdown' })
   return mainMenu(ctx)
 })
@@ -289,19 +279,20 @@ async function renderDetail(ctx, id) {
   const icon = statusIcon(d)
   const startDay = new Date(u.start_date).toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh', day: 'numeric' })
 
-  let msg = `${icon} ${u.name}\n------------------\n`
-  msg += `Service: ${u.service}\n`
-  if (u.note) msg += `Note: ${u.note}\n`
-  msg += `Period: ${fmt(u.start_date)} -> ${fmt(u.expiry_date)}\n`
-  msg += `Remaining: ${d <= 0 ? `Overdue ${Math.abs(d)} days` : `${d} days left`}\n`
-  msg += `Monthly reminder: ${u.monthly_remind ? `ON (day ${startDay})` : 'OFF'}`
+  let msg = `${icon} *${u.name}*\n━━━━━━━━━━━━━━\n`
+  msg += `📦 ${u.service}\n`
+  if (u.note) msg += `📝 ${u.note}\n`
+  msg += `📅 ${fmt(u.start_date)} → ${fmt(u.expiry_date)}\n`
+  msg += `⏳ ${d <= 0 ? `Quá hạn ${Math.abs(d)} ngày` : `Còn ${d} ngày`}\n`
+  msg += `🔔 Nhắc tháng: ${u.monthly_remind ? `BẬT (ngày ${startDay})` : 'TẮT'}`
 
   await ctx.editMessageText(msg, {
+    parse_mode: 'Markdown',
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('Edit name', `ed_n:${id}`), Markup.button.callback('Edit note', `ed_g:${id}`)],
-      [Markup.button.callback('Edit start date', `ed_s:${id}`), Markup.button.callback('Edit remaining days', `ed_e:${id}`)],
-      [Markup.button.callback('Change service', `svc:${id}`), Markup.button.callback(u.monthly_remind ? 'Turn reminder off' : 'Turn reminder on', `tog:${id}`)],
-      [Markup.button.callback('Delete', `del:${id}`), Markup.button.callback('Back', 'back')]
+      [Markup.button.callback('✏️ Sửa tên', `ed_n:${id}`), Markup.button.callback('✏️ Sửa ghi chú', `ed_g:${id}`)],
+      [Markup.button.callback('✏️ Sửa ngày BĐ', `ed_s:${id}`), Markup.button.callback('✏️ Sửa hạn', `ed_e:${id}`)],
+      [Markup.button.callback('🔄 Đổi dịch vụ', `svc:${id}`), Markup.button.callback(u.monthly_remind ? '🔕 Tắt nhắc' : '🔔 Bật nhắc', `tog:${id}`)],
+      [Markup.button.callback('🗑 Xóa', `del:${id}`), Markup.button.callback('🔙 Quay lại', 'back')]
     ])
   })
 }
@@ -326,10 +317,11 @@ bot.action(/^svc:(\d+)$/, async ctx => {
   await ctx.answerCbQuery()
   const u = await getCustomer(+ctx.match[1])
   if (!u) return
-  await ctx.editMessageText(`Choose a new service for ${u.name}:`, {
+  await ctx.editMessageText(`🔄 Chọn dịch vụ mới cho *${u.name}*:`, {
+    parse_mode: 'Markdown',
     ...Markup.inlineKeyboard([
-      SERVICE_LIST.map(sv => Markup.button.callback(sv === u.service ? `[Current] ${sv}` : sv, `svc_set:${u.id}:${sv}`)),
-      [Markup.button.callback('Cancel', `view:${u.id}`)]
+      SERVICE_LIST.map(sv => Markup.button.callback(sv === u.service ? `✅ ${sv}` : sv, `svc_set:${u.id}:${sv}`)),
+      [Markup.button.callback('🔙 Hủy', `view:${u.id}`)]
     ])
   })
 })
@@ -346,9 +338,10 @@ bot.action(/^del:(\d+)$/, async ctx => {
   await ctx.answerCbQuery()
   const id = +ctx.match[1]
   const u = await getCustomer(id)
-  await ctx.editMessageText(`Delete ${u?.name}?`, {
+  await ctx.editMessageText(`⚠️ Xóa *${u?.name}*?`, {
+    parse_mode: 'Markdown',
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('Confirm delete', `del_ok:${id}`), Markup.button.callback('Cancel', `view:${id}`)]
+      [Markup.button.callback('✅ Xác nhận xóa', `del_ok:${id}`), Markup.button.callback('🔙 Hủy', `view:${id}`)]
     ])
   })
 })
@@ -363,7 +356,7 @@ bot.action(/^del_ok:(\d+)$/, async ctx => {
 bot.action(/^ed_([ngse]):(\d+)$/, async ctx => {
   await ctx.answerCbQuery()
   const type = ctx.match[1], id = +ctx.match[2]
-  const prompts = { n: 'Nhập tên mới:', g: 'Nhập ghi chú mới (gõ 0 để xóa):', s: 'Nhập ngày bắt đầu (dd/mm/yyyy):', e: 'Nhập số ngày còn lại (ví dụ: 30):' }
+  const prompts = { n: 'Nhập tên mới:', g: 'Nhập ghi chú mới (gõ 0 để xóa):', s: 'Nhập ngày bắt đầu (dd/mm/yyyy):', e: 'Nhập ngày hết hạn (dd/mm/yyyy):' }
   setState(ctx.from.id, { step: `edit_${type}`, id })
   ctx.reply(`✏️ ${prompts[type]}`, cancelKb)
 })
@@ -479,13 +472,10 @@ bot.action('export', async ctx => {
     sd: fmt(u.start_date), ed: fmt(u.expiry_date),
     d: daysLeft(u.expiry_date), mr: u.monthly_remind ? 'Có' : 'Không'
   }))
-  const file = path.join(os.tmpdir(), `customers-${Date.now()}-${ctx.from.id}.xlsx`)
-  try {
-    await wb.xlsx.writeFile(file)
-    await ctx.replyWithDocument({ source: file })
-  } finally {
-    if (fs.existsSync(file)) fs.unlinkSync(file)
-  }
+  const file = '/tmp/customers.xlsx'
+  await wb.xlsx.writeFile(file)
+  await ctx.replyWithDocument({ source: file })
+  fs.unlinkSync(file)
 })
 
 bot.action('reset', async ctx => {
@@ -564,41 +554,16 @@ bot.on('text', async ctx => {
 
     if (type === 'n') col = 'name'
     if (type === 'g') { col = 'note'; val = text === '0' ? null : text }
-    if (type === 's') {
+    if (type === 's' || type === 'e') {
       val = parseDateVN(text)
       if (!val) return ctx.reply('❌ Ngày không hợp lệ. Nhập dd/mm/yyyy:')
-      col = 'start_date'
-    }
-    if (type === 'e') {
-      const days = Number.parseInt(text, 10)
-      if (!Number.isInteger(days) || days < 0 || days > 3650) {
-        return ctx.reply('❌ Số ngày không hợp lệ. Hãy nhập số từ 0 đến 3650, ví dụ: 30')
-      }
-      const expiry = todayVN()
-      expiry.setDate(expiry.getDate() + days)
-      val = expiry
-      col = 'expiry_date'
+      col = type === 's' ? 'start_date' : 'expiry_date'
     }
 
     await db.query(`UPDATE customers SET ${col}=$1 WHERE id=$2`, [val, s.id])
     clearState(ctx.from.id)
-
-    const updated = await getCustomer(s.id)
-    if (!updated) {
-      await ctx.reply('✅ Đã cập nhật!', Markup.removeKeyboard())
-      return
-    }
-
-    const remaining = daysLeft(updated.expiry_date)
-    let summary = 'Updated customer information\n\n'
-    summary += 'Customer: ' + updated.name + '\n'
-    summary += 'Service: ' + updated.service + '\n'
-    if (updated.note) summary += 'Note: ' + updated.note + '\n'
-    summary += 'Period: ' + fmt(updated.start_date) + ' -> ' + fmt(updated.expiry_date) + '\n'
-    summary += 'Remaining days: ' + remaining + '\n'
-    summary += 'Monthly reminder: ' + (updated.monthly_remind ? 'ON' : 'OFF')
-
-    await ctx.reply(summary, Markup.removeKeyboard())
+    ctx.reply('✅ Đã cập nhật!', Markup.removeKeyboard())
+    bot.handleUpdate({ callback_query: { id: '0', from: ctx.from, message: ctx.message, data: `view:${s.id}` } })
     return
   }
 })
@@ -672,4 +637,3 @@ bot.launch({ dropPendingUpdates: true })
 process.once('SIGINT', () => bot.stop('SIGINT'))
 process.once('SIGTERM', () => bot.stop('SIGTERM'))
 console.log('🚀 Bot running')
-
