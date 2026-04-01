@@ -289,20 +289,19 @@ async function renderDetail(ctx, id) {
   const icon = statusIcon(d)
   const startDay = new Date(u.start_date).toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh', day: 'numeric' })
 
-  let msg = `${icon} *${u.name}*\n━━━━━━━━━━━━━━\n`
-  msg += `📦 ${u.service}\n`
-  if (u.note) msg += `📝 ${u.note}\n`
-  msg += `📅 ${fmt(u.start_date)} → ${fmt(u.expiry_date)}\n`
-  msg += `⏳ ${d <= 0 ? `Quá hạn ${Math.abs(d)} ngày` : `Còn ${d} ngày`}\n`
-  msg += `🔔 Nhắc tháng: ${u.monthly_remind ? `BẬT (ngày ${startDay})` : 'TẮT'}`
+  let msg = `${icon} ${u.name}\n------------------\n`
+  msg += `Service: ${u.service}\n`
+  if (u.note) msg += `Note: ${u.note}\n`
+  msg += `Period: ${fmt(u.start_date)} -> ${fmt(u.expiry_date)}\n`
+  msg += `Remaining: ${d <= 0 ? `Overdue ${Math.abs(d)} days` : `${d} days left`}\n`
+  msg += `Monthly reminder: ${u.monthly_remind ? `ON (day ${startDay})` : 'OFF'}`
 
   await ctx.editMessageText(msg, {
-    parse_mode: 'Markdown',
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('✏️ Sửa tên', `ed_n:${id}`), Markup.button.callback('✏️ Sửa ghi chú', `ed_g:${id}`)],
-      [Markup.button.callback('✏️ Sửa ngày BĐ', `ed_s:${id}`), Markup.button.callback('✏️ Sửa số ngày', `ed_e:${id}`)],
-      [Markup.button.callback('🔄 Đổi dịch vụ', `svc:${id}`), Markup.button.callback(u.monthly_remind ? '🔕 Tắt nhắc' : '🔔 Bật nhắc', `tog:${id}`)],
-      [Markup.button.callback('🗑 Xóa', `del:${id}`), Markup.button.callback('🔙 Quay lại', 'back')]
+      [Markup.button.callback('Edit name', `ed_n:${id}`), Markup.button.callback('Edit note', `ed_g:${id}`)],
+      [Markup.button.callback('Edit start date', `ed_s:${id}`), Markup.button.callback('Edit remaining days', `ed_e:${id}`)],
+      [Markup.button.callback('Change service', `svc:${id}`), Markup.button.callback(u.monthly_remind ? 'Turn reminder off' : 'Turn reminder on', `tog:${id}`)],
+      [Markup.button.callback('Delete', `del:${id}`), Markup.button.callback('Back', 'back')]
     ])
   })
 }
@@ -327,11 +326,10 @@ bot.action(/^svc:(\d+)$/, async ctx => {
   await ctx.answerCbQuery()
   const u = await getCustomer(+ctx.match[1])
   if (!u) return
-  await ctx.editMessageText(`🔄 Chọn dịch vụ mới cho *${u.name}*:`, {
-    parse_mode: 'Markdown',
+  await ctx.editMessageText(`Choose a new service for ${u.name}:`, {
     ...Markup.inlineKeyboard([
-      SERVICE_LIST.map(sv => Markup.button.callback(sv === u.service ? `✅ ${sv}` : sv, `svc_set:${u.id}:${sv}`)),
-      [Markup.button.callback('🔙 Hủy', `view:${u.id}`)]
+      SERVICE_LIST.map(sv => Markup.button.callback(sv === u.service ? `[Current] ${sv}` : sv, `svc_set:${u.id}:${sv}`)),
+      [Markup.button.callback('Cancel', `view:${u.id}`)]
     ])
   })
 })
@@ -348,10 +346,9 @@ bot.action(/^del:(\d+)$/, async ctx => {
   await ctx.answerCbQuery()
   const id = +ctx.match[1]
   const u = await getCustomer(id)
-  await ctx.editMessageText(`⚠️ Xóa *${u?.name}*?`, {
-    parse_mode: 'Markdown',
+  await ctx.editMessageText(`Delete ${u?.name}?`, {
     ...Markup.inlineKeyboard([
-      [Markup.button.callback('✅ Xác nhận xóa', `del_ok:${id}`), Markup.button.callback('🔙 Hủy', `view:${id}`)]
+      [Markup.button.callback('Confirm delete', `del_ok:${id}`), Markup.button.callback('Cancel', `view:${id}`)]
     ])
   })
 })
