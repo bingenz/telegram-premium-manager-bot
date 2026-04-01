@@ -243,10 +243,7 @@ async function renderList(ctx, search, page, filter, isEdit) {
 
   const opts = { parse_mode: 'Markdown', ...Markup.inlineKeyboard(kb) }
   if (isEdit) { try { await ctx.editMessageText(msg, opts) } catch(e){} }
-  else {
-    await ctx.reply(msg, { parse_mode: 'Markdown', ...cancelKb })
-    await ctx.reply('Chọn khách hoặc dùng nút điều hướng bên dưới:', opts)
-  }
+  else await ctx.reply(msg, { ...cancelKb, ...opts })
 }
 
 // Nhấn nút cycle → chuyển filter tiếp theo
@@ -295,18 +292,6 @@ async function renderDetail(ctx, id) {
       [Markup.button.callback('🗑 Xóa', `del:${id}`), Markup.button.callback('🔙 Quay lại', 'back')]
     ])
   })
-}
-
-async function reopenDetailAfterEdit(ctx, id) {
-  const u = await getCustomer(id)
-  if (!u) return mainMenu(ctx)
-  try {
-    await ctx.reply('✅ Đã cập nhật!', Markup.removeKeyboard())
-    await renderDetail(ctx, id)
-  } catch (e) {
-    await ctx.reply('✅ Đã cập nhật!')
-    await mainMenu(ctx)
-  }
 }
 
 bot.action('back', async ctx => {
@@ -368,7 +353,7 @@ bot.action(/^del_ok:(\d+)$/, async ctx => {
 bot.action(/^ed_([ngse]):(\d+)$/, async ctx => {
   await ctx.answerCbQuery()
   const type = ctx.match[1], id = +ctx.match[2]
-  const prompts = { n: 'Nhập tên mới:', g: 'Nhập ghi chú mới (gõ 0 để xóa):', s: 'Nhập ngày bắt đầu mới (dd/mm/yyyy):', e: 'Nhập ngày hết hạn mới (dd/mm/yyyy):' }
+  const prompts = { n: 'Nhập tên mới:', g: 'Nhập ghi chú mới (gõ 0 để xóa):', s: 'Nhập ngày bắt đầu (dd/mm/yyyy):', e: 'Nhập ngày hết hạn (dd/mm/yyyy):' }
   setState(ctx.from.id, { step: `edit_${type}`, id })
   ctx.reply(`✏️ ${prompts[type]}`, cancelKb)
 })
@@ -415,16 +400,12 @@ bot.hears('🔔 Lịch nhắc', async ctx => {
   const thisMonth = todayVNDate.getMonth()
   const thisYear = todayVNDate.getFullYear()
 
-  function daysInMonth(year, monthIndex) {
-    return new Date(year, monthIndex + 1, 0).getDate()
-  }
-
   function nextRemindDate(startDate) {
-    const remindDay = parseInt(new Date(startDate).toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh', day: 'numeric' }))
-    const buildDate = (year, monthIndex) => new Date(year, monthIndex, Math.min(remindDay, daysInMonth(year, monthIndex)))
-
-    let next = buildDate(thisYear, thisMonth)
-    if (next <= todayVNDate) next = buildDate(thisYear, thisMonth + 1)
+    const remindDay = new Date(startDate).toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh', day: 'numeric' })
+    const d = parseInt(remindDay)
+    // Thử tháng này trước
+    let next = new Date(thisYear, thisMonth, d)
+    if (next <= todayVNDate) next = new Date(thisYear, thisMonth + 1, d) // qua tháng sau
     return next
   }
 
@@ -578,7 +559,8 @@ bot.on('text', async ctx => {
 
     await db.query(`UPDATE customers SET ${col}=$1 WHERE id=$2`, [val, s.id])
     clearState(ctx.from.id)
-    await reopenDetailAfterEdit(ctx, s.id)
+    ctx.reply('✅ Đã cập nhật!', Markup.removeKeyboard())
+    bot.handleUpdate({ callback_query: { id: '0', from: ctx.from, message: ctx.message, data: `view:${s.id}` } })
     return
   }
 })
