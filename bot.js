@@ -170,8 +170,13 @@ bot.action(/^add_(yes|no)$/, async ctx => {
   )
   clearState(ctx.from.id)
   const startDay = s.start.getDate()
-  let ok = `✅ Đã thêm *${s.name}* (${s.service})\n`
-  ok += remind ? `🔔 Sẽ nhắc ngày ${startDay} mỗi tháng lúc 9:00` : `🔕 Không nhắc tháng`
+  let ok = 'Added customer\n\n'
+  ok += 'Customer: ' + s.name + '\n'
+  ok += 'Service: ' + s.service + '\n'
+  if (s.note) ok += 'Note: ' + s.note + '\n'
+  ok += 'Period: ' + fmt(s.start) + ' -> ' + fmt(expiry) + '\n'
+  ok += 'Remaining days: ' + daysLeft(expiry) + '\n'
+  ok += remind ? 'Monthly reminder: ON (day ' + startDay + ' at 09:00)' : 'Monthly reminder: OFF'
   await ctx.editMessageText(ok, { parse_mode: 'Markdown' })
   return mainMenu(ctx)
 })
@@ -580,8 +585,23 @@ bot.on('text', async ctx => {
 
     await db.query(`UPDATE customers SET ${col}=$1 WHERE id=$2`, [val, s.id])
     clearState(ctx.from.id)
-    ctx.reply('✅ Đã cập nhật!', Markup.removeKeyboard())
-    bot.handleUpdate({ callback_query: { id: '0', from: ctx.from, message: ctx.message, data: `view:${s.id}` } })
+
+    const updated = await getCustomer(s.id)
+    if (!updated) {
+      await ctx.reply('✅ Đã cập nhật!', Markup.removeKeyboard())
+      return
+    }
+
+    const remaining = daysLeft(updated.expiry_date)
+    let summary = 'Updated customer information\n\n'
+    summary += 'Customer: ' + updated.name + '\n'
+    summary += 'Service: ' + updated.service + '\n'
+    if (updated.note) summary += 'Note: ' + updated.note + '\n'
+    summary += 'Period: ' + fmt(updated.start_date) + ' -> ' + fmt(updated.expiry_date) + '\n'
+    summary += 'Remaining days: ' + remaining + '\n'
+    summary += 'Monthly reminder: ' + (updated.monthly_remind ? 'ON' : 'OFF')
+
+    await ctx.reply(summary, Markup.removeKeyboard())
     return
   }
 })
