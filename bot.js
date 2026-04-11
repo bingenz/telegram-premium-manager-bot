@@ -56,6 +56,20 @@ function todayVN() {
 function todayDayVN() {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' })).getDate()
 }
+function addDays(date, n) {
+  const d = new Date(date)
+  d.setDate(d.getDate() + n)
+  return d
+}
+function makeValidDate(y, m, d) {
+  const date = new Date(y, m - 1, d)
+  if (
+    date.getFullYear() !== y ||
+    date.getMonth() !== m - 1 ||
+    date.getDate() !== d
+  ) return null
+  return date
+}
 function parseShortDate(text) {
   const t = text.trim().replace(/\D/g, '')
   let d, m, y
@@ -63,18 +77,25 @@ function parseShortDate(text) {
   else if (t.length === 8) { d = +t.slice(0,2); m = +t.slice(2,4); y = +t.slice(4,8) }
   else return null
   if (m<1||m>12||d<1||d>31||y<2000||y>2100) return null
-  return new Date(y, m-1, d)
+  return makeValidDate(y, m, d)
 }
 function parseDateVN(text) {
   const m = text.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
   if (!m) return null
   const d = +m[1], mo = +m[2], y = +m[3]
   if (mo<1||mo>12||d<1||d>31||y<2000||y>2100) return null
-  return new Date(y, mo-1, d)
+  return makeValidDate(y, mo, d)
 }
 function isValidMonths(text) {
   const n = parseInt(text.trim())
   return !isNaN(n) && n > 0 && n <= 120 && String(n) === text.trim()
+}
+function parsePositiveDays(text) {
+  const t = text.trim()
+  if (!/^\d+$/.test(t)) return null
+  const n = parseInt(t, 10)
+  if (n <= 0 || n > 3650) return null
+  return n
 }
 async function getCustomer(id) {
   const r = await db.query('SELECT * FROM customers WHERE id=$1', [id])
@@ -225,10 +246,13 @@ async function renderList(ctx, search, page, filter, isEdit) {
 
   chunk.forEach(u => {
     const d = daysLeft(u.expiry_date)
-    kb.push([Markup.button.callback(
-      statusIcon(d) + (u.monthly_remind ? '🔔' : '') + ' ' + u.name + ' — ' + u.service,
-      'view:' + u.id
-    )])
+    kb.push([
+      Markup.button.callback(
+        statusIcon(d) + (u.monthly_remind ? '🔔' : '') + ' ' + u.name + ' — ' + u.service,
+        'view:' + u.id
+      ),
+      Markup.button.callback('🗑', 'del:' + u.id)
+    ])
   })
 
   // Phân trang — dùng « » để không nhầm với icon dịch vụ
@@ -269,29 +293,43 @@ bot.action(/^view:(\d+)$/, async ctx => {
   await renderDetail(ctx, +ctx.match[1])
 })
 
-async function renderDetail(ctx, id) {
-  const u = await getCustomer(id)
-  if (!u) return
+function buildDetailMessage(u) {
   const d = daysLeft(u.expiry_date)
   const icon = statusIcon(d)
   const startDay = new Date(u.start_date).toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh', day: 'numeric' })
 
-  let msg = `${icon} *${u.name}*\n━━━━━━━━━━━━━━\n`
-  msg += `📦 ${u.service}\n`
-  if (u.note) msg += `📝 ${u.note}\n`
-  msg += `📅 ${fmt(u.start_date)} → ${fmt(u.expiry_date)}\n`
-  msg += `⏳ ${d <= 0 ? `Quá hạn ${Math.abs(d)} ngày` : `Còn ${d} ngày`}\n`
+  let msg = `${icon} *${u.name}*
+━━━━━━━━━━━━━━
+`
+  msg += `📦 ${u.service}
+`
+  if (u.note) msg += `📝 ${u.note}
+`
+  msg += `📅 ${fmt(u.start_date)} → ${fmt(u.expiry_date)}
+`
+  msg += `⏳ ${d <= 0 ? `Quá hạn ${Math.abs(d)} ngày` : `Còn ${d} ngày`}
+`
   msg += `🔔 Nhắc tháng: ${u.monthly_remind ? `BẬT (ngày ${startDay})` : 'TẮT'}`
 
-  await ctx.editMessageText(msg, {
-    parse_mode: 'Markdown',
-    ...Markup.inlineKeyboard([
-      [Markup.button.callback('✏️ Sửa tên', `ed_n:${id}`), Markup.button.callback('✏️ Sửa ghi chú', `ed_g:${id}`)],
-      [Markup.button.callback('✏️ Sửa ngày BĐ', `ed_s:${id}`), Markup.button.callback('✏️ Sửa hạn', `ed_e:${id}`)],
-      [Markup.button.callback('🔄 Đổi dịch vụ', `svc:${id}`), Markup.button.callback(u.monthly_remind ? '🔕 Tắt nhắc' : '🔔 Bật nhắc', `tog:${id}`)],
-      [Markup.button.callback('🗑 Xóa', `del:${id}`), Markup.button.callback('🔙 Quay lại', 'back')]
-    ])
-  })
+  return {
+    msg,
+    opts: {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('✏️ Sửa tên', `ed_n:${u.id}`), Markup.button.callback('✏️ Sửa ghi chú', `ed_g:${u.id}`)],
+        [Markup.button.callback('✏️ Sửa ngày BĐ', `ed_s:${u.id}`), Markup.button.callback('✏️ Sửa hạn', `ed_e:${u.id}`)],
+        [Markup.button.callback('🔄 Đổi dịch vụ', `svc:${u.id}`), Markup.button.callback(u.monthly_remind ? '🔕 Tắt nhắc' : '🔔 Bật nhắc', `tog:${u.id}`)],
+        [Markup.button.callback('🗑 Xóa', `del:${u.id}`), Markup.button.callback('🔙 Quay lại', 'back')]
+      ])
+    }
+  }
+}
+
+async function renderDetail(ctx, id) {
+  const u = await getCustomer(id)
+  if (!u) return
+  const { msg, opts } = buildDetailMessage(u)
+  await ctx.editMessageText(msg, opts)
 }
 
 bot.action('back', async ctx => {
@@ -353,31 +391,75 @@ bot.action(/^del_ok:(\d+)$/, async ctx => {
 bot.action(/^ed_([ngse]):(\d+)$/, async ctx => {
   await ctx.answerCbQuery()
   const type = ctx.match[1], id = +ctx.match[2]
-  const prompts = { n: 'Nhập tên mới:', g: 'Nhập ghi chú mới (gõ 0 để xóa):', s: 'Nhập ngày bắt đầu (dd/mm/yyyy):', e: 'Nhập ngày hết hạn (dd/mm/yyyy):' }
-  setState(ctx.from.id, { step: `edit_${type}`, id })
+  const prompts = {
+    n: 'Nhập tên mới:',
+    g: 'Nhập ghi chú mới (gõ 0 để xóa):',
+    s: 'Nhập ngày bắt đầu (dd/mm/yyyy):',
+    e: 'Nhập ngày hết hạn mới (dd/mm/yyyy) hoặc số ngày tính từ hôm nay:'
+  }
+  setState(ctx.from.id, {
+    step: `edit_${type}`,
+    id,
+    detailMessageId: ctx.callbackQuery?.message?.message_id,
+    chatId: ctx.chat?.id
+  })
   ctx.reply(`✏️ ${prompts[type]}`, cancelKb)
 })
 
+
+function buildExpiryAlertMessage(rows) {
+  const buckets = {
+    overdue: rows.filter(u => daysLeft(u.expiry_date) <= 0),
+    day1: rows.filter(u => daysLeft(u.expiry_date) === 1),
+    day3: rows.filter(u => daysLeft(u.expiry_date) === 3)
+  }
+
+  const total = buckets.overdue.length + buckets.day1.length + buckets.day3.length
+  if (!total) return null
+
+  function section(title, items, mode) {
+    if (!items.length) return ''
+    let msg = `
+${title}
+`
+    items.forEach(u => {
+      const d = daysLeft(u.expiry_date)
+      msg += `
+• *${u.name}* — ${u.service}
+`
+      if (u.note) msg += `  📝 ${u.note}
+`
+      msg += `  📅 Hết: ${fmt(u.expiry_date)}
+`
+      if (mode === 'overdue') msg += `  ⏳ Quá hạn ${Math.abs(d)} ngày
+`
+      if (mode === 'day1') msg += `  ⏳ Còn 1 ngày
+`
+      if (mode === 'day3') msg += `  ⏳ Còn 3 ngày
+`
+    })
+    return msg
+  }
+
+  let msg = `⚠️ *CẢNH BÁO HẾT HẠN CẦN XỬ LÝ* (${total} khách)
+━━━━━━━━━━━━━━
+`
+  msg += section('🔴 *Trễ hạn cần xử lý*', buckets.overdue, 'overdue')
+  msg += section('🟠 *Còn 1 ngày*', buckets.day1, 'day1')
+  msg += section('🟡 *Còn 3 ngày*', buckets.day3, 'day3')
+  return msg.trim()
+}
 
 // ═══════════════════════════════════════════
 // 3. SẮP HẾT HẠN
 // ═══════════════════════════════════════════
 bot.hears('⚠️ Sắp hết hạn', async ctx => {
   const rows = (await db.query(
-    `SELECT * FROM customers WHERE expiry_date <= NOW() + '7 days'::INTERVAL ORDER BY expiry_date ASC`
+    `SELECT * FROM customers WHERE expiry_date <= NOW() + '3 days'::INTERVAL ORDER BY expiry_date ASC`
   )).rows
 
-  if (!rows.length) return ctx.reply('✅ Không có khách nào sắp hết hạn trong 7 ngày.')
-
-  let msg = `⚠️ *SẮP HẾT HẠN* (${rows.length} khách)\n━━━━━━━━━━━━━━\n`
-  rows.forEach(u => {
-    const d = daysLeft(u.expiry_date)
-    const icon = statusIcon(d)
-    msg += `\n${icon} *${u.name}* — ${u.service}\n`
-    if (u.note) msg += `   📝 ${u.note}\n`
-    msg += `   📅 Hết: ${fmt(u.expiry_date)} `
-    msg += d <= 0 ? `*(quá ${Math.abs(d)} ngày)*\n` : `*(còn ${d} ngày)*\n`
-  })
+  const msg = buildExpiryAlertMessage(rows)
+  if (!msg) return ctx.reply('✅ Không có khách nào ở mốc cảnh báo 3 ngày, 1 ngày hoặc trễ hạn.')
 
   ctx.reply(msg, { parse_mode: 'Markdown' })
 })
@@ -520,6 +602,7 @@ bot.on('text', async ctx => {
   if (s.step === 'add_form') {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
     if (lines.length < 2) return ctx.reply('❌ Cần ít nhất 2 dòng. Nhập lại:')
+    if (lines.length > 4) return ctx.reply('❌ Chỉ hỗ trợ tối đa 4 dòng theo mẫu. Nhập lại:')
 
     let name, note = null, start = todayVN(), monthStr
 
@@ -551,16 +634,37 @@ bot.on('text', async ctx => {
 
     if (type === 'n') col = 'name'
     if (type === 'g') { col = 'note'; val = text === '0' ? null : text }
-    if (type === 's' || type === 'e') {
+    if (type === 's') {
       val = parseDateVN(text)
       if (!val) return ctx.reply('❌ Ngày không hợp lệ. Nhập dd/mm/yyyy:')
-      col = type === 's' ? 'start_date' : 'expiry_date'
+      col = 'start_date'
+    }
+    if (type === 'e') {
+      const asDate = parseDateVN(text)
+      const asDays = parsePositiveDays(text)
+      if (asDate) val = asDate
+      else if (asDays !== null) val = addDays(todayVN(), asDays)
+      else return ctx.reply('❌ Hạn không hợp lệ. Nhập dd/mm/yyyy hoặc số ngày tính từ hôm nay:')
+      col = 'expiry_date'
     }
 
     await db.query(`UPDATE customers SET ${col}=$1 WHERE id=$2`, [val, s.id])
+    const detailTarget = { chatId: s.chatId, messageId: s.detailMessageId, id: s.id }
     clearState(ctx.from.id)
-    ctx.reply('✅ Đã cập nhật!', Markup.removeKeyboard())
-    bot.handleUpdate({ callback_query: { id: '0', from: ctx.from, message: ctx.message, data: `view:${s.id}` } })
+
+    const updated = await getCustomer(detailTarget.id)
+    if (!updated) return ctx.reply('✅ Đã cập nhật!', Markup.removeKeyboard())
+
+    const { msg, opts } = buildDetailMessage(updated)
+
+    if (detailTarget.chatId && detailTarget.messageId) {
+      try {
+        await bot.telegram.editMessageText(detailTarget.chatId, detailTarget.messageId, undefined, msg, opts)
+      } catch (e) {}
+    }
+
+    await ctx.reply('✅ Đã cập nhật. Thông tin mới:', Markup.removeKeyboard())
+    await ctx.reply(msg, opts)
     return
   }
 })
@@ -574,22 +678,10 @@ bot.on('text', async ctx => {
 cron.schedule('0 9 * * *', async () => {
   try {
     const rows = (await db.query(
-      `SELECT * FROM customers WHERE expiry_date <= NOW() + '7 days'::INTERVAL ORDER BY expiry_date ASC`
+      `SELECT * FROM customers WHERE expiry_date <= NOW() + '3 days'::INTERVAL ORDER BY expiry_date ASC`
     )).rows
-    if (!rows.length) return
-
-    let msg = `⏰ BÁO CÁO HẠN SẮP HẾT\n━━━━━━━━━━━━━━\n`
-    rows.forEach(u => {
-      const d = daysLeft(u.expiry_date)
-      if ([7,3,2,1,0,-1,-2].includes(d)) {
-        const icon = statusIcon(d)
-        msg += `\n${icon} ${u.name} (${u.service})`
-        if (u.note) msg += ` — ${u.note}`
-        msg += `\n   ${d <= 0 ? `Quá ${Math.abs(d)} ngày` : `Còn ${d} ngày`} (hết ${fmt(u.expiry_date)})\n`
-      }
-    })
-    if (msg.includes('🔴') || msg.includes('🟠') || msg.includes('🟡'))
-      bot.telegram.sendMessage(ADMIN_ID, msg)
+    const msg = buildExpiryAlertMessage(rows)
+    if (msg) await bot.telegram.sendMessage(ADMIN_ID, `⏰ ${msg}`)
   } catch(e) { console.error('Cron hạn:', e) }
 }, { timezone: 'Asia/Ho_Chi_Minh' })
 
